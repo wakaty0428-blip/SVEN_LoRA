@@ -1,3 +1,13 @@
+# scripts internal git metadata backup
+/scripts/.git.BAK/
+
+# scripts generated outputs / figures
+/scripts/box_plots/
+/scripts/figures_by_cwe/
+/scripts/figures_lora/
+/scripts/figures_prefix/
+
+
 # Ignore large auto-generated or downloadable files
 **/codeql-linux64.zip
 **/*.bin
