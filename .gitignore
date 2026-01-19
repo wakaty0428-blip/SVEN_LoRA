@@ -6,7 +6,7 @@
 /scripts/figures_by_cwe/
 /scripts/figures_lora/
 /scripts/figures_prefix/
-
+/scripts/350m/
 
 # Ignore large auto-generated or downloadable files
 **/codeql-linux64.zip
