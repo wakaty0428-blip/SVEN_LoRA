@@ -25,11 +25,39 @@ $ pip install -e .
 $ ./setup_codeql.sh
 ```
 
+
+## Training
+We provide trained security controls in `./trained`, including both **prefix-based** and **LoRA-based** SVEN models.
+
+To train **prefix-based** SVEN, run:
+```console
+$ python train.py --model_type prefix --output_name 350m-prefix-new --pretrain_dir 350m
+```
+To train **LoRA-based** SVEN, run:
+```console
+$ python train.py --output_name 350m-lora-new --pretrain_dir 'Salesforce/codegen-350M-multi' --model_type lora --learning_rate 1e-4 --lora_r 8 --kl_loss_ratio 330 --contrastive_loss_ratio 33 --lm_loss_ratio 0.34 --num_train_epochs 5
+```
+
+To train effectively, **bayesian-search** is popular, so this command below is an example;
+```console
+$ python bayesian_train_lora.py
+```
+```console
+$ python bayesian_train_prefix.py
+```
+However, plaese note that if you want to change hyperparameters or whatever, you have to change this scripts a bit.
+
+Computation time is calculated by running this file as an example;
+```console
+$ python comp_time.py --patterns "2b-lr0.01_p16_*" "2b-lr0.0001_r8_*"
+```
+This file also allows us to get a box -plot represents each method computation time.
+
 ## Evaluation
-The evaluation consists of two parts: security and functional correctness. You should run the evaluation scripts under the `./scripts` directory. Make sure to use `CUDA_VISIBLE_DEVICES` to select the correct GPUs.
+The evaluation consists of two parts: security and functional correctness. You should run the evaluation scripts under the `./scripts` directory. Make sure to use `CUDA_VISIBLE_DEVICES` to select the correct GPUs. Specifically, training does not matter what GPUs are used, but when it comes to evaluation, you have to do experiments with only one GPU.
 
 ### Evaluation on Security
-To evaluate the security of the original LLM, run the command below. The model `350m` can be replaced by {`2b`, `6b`, `incoder`, `santa`}. See `sec_eval.py` for other options, such as using `--temp` to adjust temperature and using `--eval_type` to select the evaluation scenarios.
+To evaluate the security of the original LLM, run the command below. The model `350m` can be replaced by {`2b`, `6b`}. See `sec_eval.py` for other options, such as using `--temp` to adjust temperature and using `--eval_type` to select the evaluation scenarios.
 ```console
 $ python sec_eval.py --model_type lm --model_dir 350m --output_name sec-eval-350m-lm
 ```
@@ -51,13 +79,26 @@ Use `print_results.py` to obtain the evaluation results. An example command for 
 $ python print_results.py --eval_dir ../experiments/sec_eval/sec-eval-350m-lm
 ```
 
-Use `make_graph_sr.py` to obtain the bar graphs. An example command for the LoRA-base SVEN is:
+I also created useful file to run both security rate evaluation and print at the same time shown as below;
+```console
+$ python grid_sec_eval_lora.py
+```
+```console
+$ python grid_sec_eval_prefix.py
+```
+
+Use `make_graph_sr.py` to obtain the bar graphs. An example command for the **LoRA-based** SVEN is:
 ```console
 $ python make_graph_sr.py --mode lora --lm_txt sr-350m-lm.txt --lora_sec_txt 350m-lr0.0001_r8_lm0.400_con35_kl250-sec.txt --lora_vul_txt 350m-lr0.0001_r8_lm0.400_con35_kl250-vul.txt --out_dir figures_lora --tag 350m-lr0.0001_r8_lm0.400_con35_kl250
 ```
-When it comes to obtain the prefix-based bar graphs, you can run the command below:
+When it comes to obtain the **prefix-based** bar graphs, you can run the command below:
 ```console
 $ python make_graph_sr.py --mode prefix --lm_txt sr-350m-lm.txt --prefix_txt 350m-lr0.01_p16_lm0.360_con27_kl370.txt --out_dir figures_prefix --tag 350m-lr0.01_p16_lm0.360_con27_kl370
+```
+
+Use `box_plots_sr.py` to obtain the box plot for security rate. 
+```console
+$ python box_plots_sr.py --scripts_dir 350m --method both --control sec --out sr_sec_prefix_vs_lora.png
 ```
 
 ### Evaluation on Functional Correctness
@@ -85,16 +126,22 @@ To view the results (for the original LLM for example), run:
 $ python print_results.py --eval_type human_eval --eval_dir ../experiments/human_eval/human-eval-350m-lm
 ```
 
-## Training
-We provide trained security controls in `./trained`, including both **prefix-based** and **LoRA-based** SVEN models.
-
-To train **prefix-based** SVEN, run:
+I also created useful file to run both functional correctness evaluation and print at the same time shown as below;
 ```console
-$ python train.py --model_type prefix --output_name 350m-prefix-new --pretrain_dir 350m
+$ python grid_human_eval_lora.py
 ```
-To train **LoRA-based** SVEN, run:
 ```console
-$ python train.py --output_name 350m-lora-new --pretrain_dir 'Salesforce/codegen-350M-multi' --model_type lora --learning_rate 1e-4 --lora_r 8 --kl_loss_ratio 330 --contrastive_loss_ratio 33 --lm_loss_ratio 0.34 --num_train_epochs 5
+$ python grid_human_eval_prefix.py
+```
+
+Use `box_plots_fc.py` to obtain the box plot for functional correctness. 
+```console
+$ python box_plots_fc.py --scripts_dir 350m --method both --control sec --out fc_sec_prefix_vs_lora.png
+```
+
+Finally, the score that means average of the sum of security rate and functional correctness is calculated and shown as a box plot running this command;
+```console
+$ python box_plots_score.py --scripts_dir 350m --method both --control sec --out score_sec.png
 ```
 
 ## Citation
