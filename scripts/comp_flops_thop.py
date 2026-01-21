@@ -40,7 +40,10 @@ Examples:
 
 Notes / caveats:
 - thop provides an estimate and can undercount fused/custom attention ops.
-- Still useful for consistent relative comparisons under the same input shape.
+- PEFT-wrapped models can contain shared module references; thop's default
+  implementation can crash with:
+      KeyError: "attribute 'total_ops' already exists"
+  This script uses a safe profiling wrapper to avoid that crash.
 """
 
 from __future__ import annotations
@@ -49,10 +52,10 @@ import argparse
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 import torch
-from thop import profile, clever_format
+from thop import clever_format
 
 from peft import LoraConfig, get_peft_model
 
@@ -61,6 +64,13 @@ from sven.model import (
     model_from_pretrained,
     config_from_pretrained,
 )
+
+try:
+    # thop>=? where register_hooks lives in thop.profile (module)
+    from thop.profile import register_hooks as THOP_REGISTER_HOOKS
+except Exception:
+    # fallback for versions where hooks are in thop.vision.basic_hooks
+    from thop.vision.basic_hooks import register_hooks as THOP_REGISTER_HOOKS
 
 
 # -----------------------------
@@ -74,6 +84,124 @@ def build_dummy_inputs(tokenizer, batch_size: int, seq_len: int, device: torch.d
 
 
 # -----------------------------
+# thop cleanup (optional but nice)
+# -----------------------------
+def clear_thop_buffers(model: torch.nn.Module) -> None:
+    """
+    Remove thop-added buffers if they exist.
+    This alone may not fix PEFT shared-module crashes, but it's still good hygiene.
+    """
+    for m in model.modules():
+        if hasattr(m, "_buffers"):
+            m._buffers.pop("total_ops", None)
+            m._buffers.pop("total_params", None)
+        if hasattr(m, "total_ops"):
+            try:
+                delattr(m, "total_ops")
+            except Exception:
+                pass
+        if hasattr(m, "total_params"):
+            try:
+                delattr(m, "total_params")
+            except Exception:
+                pass
+
+
+# -----------------------------
+# SAFE thop profile (fixes "total_ops already exists")
+# -----------------------------
+def profile_safe(model: torch.nn.Module, inputs: Tuple[torch.Tensor, ...]) -> Tuple[float, float]:
+    """
+    Safer replacement for thop.profile() that avoids:
+        KeyError: "attribute 'total_ops' already exists"
+    which can occur when the same module instance is reachable multiple times
+    (shared references common in wrappers / PEFT models).
+
+    Returns: (macs, params)
+    """
+    handler_collection = {}
+
+    custom_ops = {}  # keep empty; you can add custom op counters later if needed
+    register_hooks = THOP_REGISTER_HOOKS
+
+
+    def add_hooks(m: torch.nn.Module):
+        m_type = type(m)
+
+        fn = None
+        if m_type in custom_ops:
+            fn = custom_ops[m_type]
+        elif m_type in register_hooks:
+            fn = register_hooks[m_type]
+
+        # Ensure buffers exist WITHOUT crashing if revisited
+        if hasattr(m, "_buffers") and "total_ops" in m._buffers:
+            m._buffers["total_ops"] = torch.zeros(1, dtype=torch.float64, device=m._buffers["total_ops"].device)
+        else:
+            try:
+                m.register_buffer("total_ops", torch.zeros(1, dtype=torch.float64))
+            except KeyError:
+                # attribute exists via shared reference; overwrite safely
+                if hasattr(m, "_buffers"):
+                    m._buffers["total_ops"] = torch.zeros(1, dtype=torch.float64)
+                else:
+                    setattr(m, "total_ops", torch.zeros(1, dtype=torch.float64))
+
+        if hasattr(m, "_buffers") and "total_params" in m._buffers:
+            m._buffers["total_params"] = torch.zeros(1, dtype=torch.float64, device=m._buffers["total_params"].device)
+        else:
+            try:
+                m.register_buffer("total_params", torch.zeros(1, dtype=torch.float64))
+            except KeyError:
+                if hasattr(m, "_buffers"):
+                    m._buffers["total_params"] = torch.zeros(1, dtype=torch.float64)
+                else:
+                    setattr(m, "total_params", torch.zeros(1, dtype=torch.float64))
+
+        # Count parameters (same idea as thop)
+        try:
+            m.total_params += torch.DoubleTensor([sum(p.numel() for p in m.parameters())])
+        except Exception:
+            # If somehow not a tensor buffer, just skip (shouldn't happen)
+            pass
+
+        # Register counting hook if available
+        if fn is not None:
+            handler_collection[m] = m.register_forward_hook(fn)
+
+    # Attach hooks
+    model.apply(add_hooks)
+
+    # Run one forward
+    with torch.no_grad():
+        _ = model(*inputs)
+
+    # Sum totals
+    total_ops = 0.0
+    total_params = 0.0
+    for m in model.modules():
+        if hasattr(m, "total_ops"):
+            try:
+                total_ops += float(m.total_ops.item())
+            except Exception:
+                pass
+        if hasattr(m, "total_params"):
+            try:
+                total_params += float(m.total_params.item())
+            except Exception:
+                pass
+
+    # Remove hooks
+    for _, h in handler_collection.items():
+        try:
+            h.remove()
+        except Exception:
+            pass
+
+    return total_ops, total_params
+
+
+# -----------------------------
 # thop wrapper (positional args)
 # -----------------------------
 class ForwardWrapper(torch.nn.Module):
@@ -81,7 +209,7 @@ class ForwardWrapper(torch.nn.Module):
     Wrapper to make a HF/PEFT model compatible with thop:
       forward(input_ids, attention_mask) -> logits
 
-    We also optionally inject prefix past_key_values for prefix tuning.
+    We optionally inject prefix past_key_values for prefix tuning.
     """
     def __init__(
         self,
@@ -124,27 +252,28 @@ def load_lora_from_checkpoint(
     device: torch.device,
 ):
     """
-    Your save format (from model.py save_model):
+    Your save format (from sven/model.py save_model):
       {lora_ckpt_dir}/sec/adapter_config.json
       {lora_ckpt_dir}/sec/adapter_model.bin
       {lora_ckpt_dir}/vul/adapter_config.json
       {lora_ckpt_dir}/vul/adapter_model.bin
+
     where "sec" corresponds to adapter_name "default" during training.
+
+    IMPORTANT: pretrain_dir must match the base model used in training
+    (e.g., Salesforce/codegen-350M-multi vs Salesforce/codegen-2B-multi).
     """
     from transformers import AutoTokenizer
 
-    # tokenizer from base LM
     tokenizer = AutoTokenizer.from_pretrained(pretrain_dir)
     if tokenizer.eos_token_id is None:
         tokenizer.eos_token_id = tokenizer.bos_token_id
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    # base LM
     cfg = config_from_pretrained(pretrain_dir, pretrain_dir)
     base_model = model_from_pretrained(pretrain_dir, "lm", cfg)
 
-    # adapter files
     adapter_dir = lora_ckpt_dir / adapter
     cfg_path = adapter_dir / "adapter_config.json"
     w_path = adapter_dir / "adapter_model.bin"
@@ -158,29 +287,22 @@ def load_lora_from_checkpoint(
 
     model = get_peft_model(base_model, lora_cfg)
 
-    # map sec->default, vul->vul (to match your trainer usage)
-    # Your saved weights include keys like "lora_A.default"/"lora_A.vul", so adapter naming matters.
+    # Ensure "vul" adapter exists if we will select it
     if adapter == "vul" and "vul" not in getattr(model, "peft_config", {}):
         model.add_adapter("vul", lora_cfg)
 
-    # load weights saved in adapter_model.bin
     state = torch.load(w_path, map_location="cpu")
-    missing, unexpected = model.load_state_dict(state, strict=False)
+    # NOTE: size mismatch will still correctly error if base model differs.
+    model.load_state_dict(state, strict=False)
 
-    # select adapter
     if adapter == "sec":
         model.set_adapter("default")
     else:
         model.set_adapter("vul")
 
-    # move to device
     model.to(device)
     model.eval()
     model.resize_token_embeddings(len(tokenizer))
-
-    # (optional) small debug if needed:
-    # print(f"[LoRA load] missing={len(missing)}, unexpected={len(unexpected)}")
-
     return tokenizer, model
 
 
@@ -220,7 +342,6 @@ def main():
         raise RuntimeError("CUDA requested but not available.")
     device = torch.device(args.device)
 
-    # ---- Load model/tokenizer ----
     is_prefix = False
 
     if args.model_type == "lm":
@@ -230,7 +351,6 @@ def main():
         loader_args = SimpleNamespace(
             device=device,
             n_gpu=args.n_gpu,
-            # unused fields but safe:
             pretrain_dir=args.pretrain_dir,
             n_prefix_token=None,
             dropout=None,
@@ -263,14 +383,16 @@ def main():
             adapter=args.adapter,
             device=device,
         )
-        is_prefix = False
 
-    # ---- Dummy inputs ----
     dummy = build_dummy_inputs(tokenizer, args.batch_size, args.seq_len, device)
 
-    # ---- thop profile ----
     wrapped = ForwardWrapper(model, is_prefix=is_prefix, control_id=args.control_id).eval()
-    macs, params = profile(wrapped, inputs=(dummy["input_ids"], dummy["attention_mask"]))
+
+    # hygiene (optional)
+    clear_thop_buffers(wrapped)
+
+    # SAFE profile (fixes shared-module KeyError)
+    macs, params = profile_safe(wrapped, inputs=(dummy["input_ids"], dummy["attention_mask"]))
 
     if args.as_flops:
         flops = 2 * macs
