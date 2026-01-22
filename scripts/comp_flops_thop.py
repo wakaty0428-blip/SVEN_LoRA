@@ -38,12 +38,6 @@ Examples:
     --adapter sec \
     --batch_size 1 --seq_len 1024
 
-Notes / caveats:
-- thop provides an estimate and can undercount fused/custom attention ops.
-- PEFT-wrapped models can contain shared module references; thop's default
-  implementation can crash with:
-      KeyError: "attribute 'total_ops' already exists"
-  This script uses a safe profiling wrapper to avoid that crash.
 """
 
 from __future__ import annotations
@@ -65,11 +59,10 @@ from sven.model import (
     config_from_pretrained,
 )
 
+# thop internals (version-robust)
 try:
-    # thop>=? where register_hooks lives in thop.profile (module)
     from thop.profile import register_hooks as THOP_REGISTER_HOOKS
 except Exception:
-    # fallback for versions where hooks are in thop.vision.basic_hooks
     from thop.vision.basic_hooks import register_hooks as THOP_REGISTER_HOOKS
 
 
@@ -89,7 +82,7 @@ def build_dummy_inputs(tokenizer, batch_size: int, seq_len: int, device: torch.d
 def clear_thop_buffers(model: torch.nn.Module) -> None:
     """
     Remove thop-added buffers if they exist.
-    This alone may not fix PEFT shared-module crashes, but it's still good hygiene.
+    This alone may not fix PEFT shared-module crashes, but it's good hygiene.
     """
     for m in model.modules():
         if hasattr(m, "_buffers"):
@@ -121,9 +114,8 @@ def profile_safe(model: torch.nn.Module, inputs: Tuple[torch.Tensor, ...]) -> Tu
     """
     handler_collection = {}
 
-    custom_ops = {}  # keep empty; you can add custom op counters later if needed
+    custom_ops = {}  # you can add custom op counters later if needed
     register_hooks = THOP_REGISTER_HOOKS
-
 
     def add_hooks(m: torch.nn.Module):
         m_type = type(m)
@@ -141,14 +133,15 @@ def profile_safe(model: torch.nn.Module, inputs: Tuple[torch.Tensor, ...]) -> Tu
             try:
                 m.register_buffer("total_ops", torch.zeros(1, dtype=torch.float64))
             except KeyError:
-                # attribute exists via shared reference; overwrite safely
                 if hasattr(m, "_buffers"):
                     m._buffers["total_ops"] = torch.zeros(1, dtype=torch.float64)
                 else:
                     setattr(m, "total_ops", torch.zeros(1, dtype=torch.float64))
 
         if hasattr(m, "_buffers") and "total_params" in m._buffers:
-            m._buffers["total_params"] = torch.zeros(1, dtype=torch.float64, device=m._buffers["total_params"].device)
+            m._buffers["total_params"] = torch.zeros(
+                1, dtype=torch.float64, device=m._buffers["total_params"].device
+            )
         else:
             try:
                 m.register_buffer("total_params", torch.zeros(1, dtype=torch.float64))
@@ -158,11 +151,10 @@ def profile_safe(model: torch.nn.Module, inputs: Tuple[torch.Tensor, ...]) -> Tu
                 else:
                     setattr(m, "total_params", torch.zeros(1, dtype=torch.float64))
 
-        # Count parameters (same idea as thop)
+        # Count parameters (thop-style; may overcount for shared weights)
         try:
             m.total_params += torch.DoubleTensor([sum(p.numel() for p in m.parameters())])
         except Exception:
-            # If somehow not a tensor buffer, just skip (shouldn't happen)
             pass
 
         # Register counting hook if available
@@ -225,7 +217,6 @@ class ForwardWrapper(torch.nn.Module):
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         if self.is_prefix:
-            # IMPORTANT: make prefix ACTIVE by providing past_key_values
             control_ids = [self.control_id] * input_ids.shape[0]
             past = self.model.get_past_from_prefix(control_ids)
             out = self.model(
@@ -259,9 +250,6 @@ def load_lora_from_checkpoint(
       {lora_ckpt_dir}/vul/adapter_model.bin
 
     where "sec" corresponds to adapter_name "default" during training.
-
-    IMPORTANT: pretrain_dir must match the base model used in training
-    (e.g., Salesforce/codegen-350M-multi vs Salesforce/codegen-2B-multi).
     """
     from transformers import AutoTokenizer
 
@@ -287,12 +275,10 @@ def load_lora_from_checkpoint(
 
     model = get_peft_model(base_model, lora_cfg)
 
-    # Ensure "vul" adapter exists if we will select it
     if adapter == "vul" and "vul" not in getattr(model, "peft_config", {}):
         model.add_adapter("vul", lora_cfg)
 
     state = torch.load(w_path, map_location="cpu")
-    # NOTE: size mismatch will still correctly error if base model differs.
     model.load_state_dict(state, strict=False)
 
     if adapter == "sec":
@@ -311,13 +297,9 @@ def parse_args():
 
     p.add_argument("--model_type", choices=["lm", "prefix", "lora"], required=True)
 
-    # LM + LoRA use base LM
     p.add_argument("--pretrain_dir", type=str, default=None)
-
-    # Prefix uses a checkpoint dir with lm.txt + pytorch_model.bin
     p.add_argument("--prefix_dir", type=str, default=None)
 
-    # LoRA uses checkpoint-last dir containing sec/ and vul/
     p.add_argument("--lora_ckpt_dir", type=str, default=None)
     p.add_argument("--adapter", choices=["sec", "vul"], default="sec")
 
@@ -326,11 +308,10 @@ def parse_args():
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--n_gpu", type=int, default=1)
 
-    # Prefix control id
     p.add_argument("--control_id", type=int, default=0)
 
-    # Reporting convention
-    p.add_argument("--as_flops", action="store_true", help="Report FLOPs = 2 * MACs convention")
+    # Keep for backward compatibility (now we always print both)
+    p.add_argument("--as_flops", action="store_true", help="(ignored) kept for backward compatibility")
 
     return p.parse_args()
 
@@ -388,25 +369,20 @@ def main():
 
     wrapped = ForwardWrapper(model, is_prefix=is_prefix, control_id=args.control_id).eval()
 
-    # hygiene (optional)
     clear_thop_buffers(wrapped)
 
-    # SAFE profile (fixes shared-module KeyError)
     macs, params = profile_safe(wrapped, inputs=(dummy["input_ids"], dummy["attention_mask"]))
 
-    if args.as_flops:
-        flops = 2 * macs
-        flops_s, params_s = clever_format([flops, params], "%.3f")
-        print("=== thop forward estimate ===")
-        print("Metric : FLOPs (FLOPs = 2 * MACs convention)")
-        print(f"FLOPs  : {flops_s}")
-        print(f"Params : {params_s}")
-    else:
-        macs_s, params_s = clever_format([macs, params], "%.3f")
-        print("=== thop forward estimate ===")
-        print("Metric : MACs")
-        print(f"MACs   : {macs_s}")
-        print(f"Params : {params_s}")
+    flops = 2.0 * macs  # convention: 1 MAC = 2 FLOPs (mul+add)
+
+    macs_s, _ = clever_format([macs, macs], "%.3f")   # second value ignored; clever_format wants list
+    flops_s, _ = clever_format([flops, flops], "%.3f")
+    params_s = clever_format([params], "%.3f")[0]
+
+    print("=== thop forward estimate ===")
+    print("Convention: FLOPs = 2 * MACs (1 MAC = mul+add)")
+    print(f"MACs  : {macs_s}")
+    print(f"FLOPs : {flops_s}")
 
     print("--- context ---")
     print(f"model_type  : {args.model_type}")
