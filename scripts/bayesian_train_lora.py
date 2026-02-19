@@ -1,166 +1,206 @@
 import re
 import subprocess
 from pathlib import Path
-
 import optuna
 
 # ==============================================================
-# Bayesian search (keep simple structure like grid_train.py)
-# Score = final val loss (parsed from train log)
-#
-# trainer.py scaling:
-#   contrastive_loss *= contrastive_loss_ratio / 100
-#   kl_loss         *= kl_loss_ratio / 1000
-#   lm_loss         *= lm_loss_ratio
-#
-# Constraint (effective weights):
-#   lm_loss_ratio + (con/100) + (kl/1000) = 1   with lm_loss_ratio >= 0
+# Base settings (edit as needed)
 # ==============================================================
 
-# ==============================================================
-# Hyperparameters (RAW ratios passed to train.py)
-# Focus search around well-balanced region near (lm,ct,kl) ≈ (0.34,0.33,0.33)
-# ==============================================================
+PRETRAIN_DIR = "Salesforce/codegen-2B-multi"
+MODEL_TYPE = "lora"
+BASE_TAG = "2b"              # used in run_name
+NUM_TRAIN_EPOCHS = 5
 
-learning_rates = [1e-4]
-lora_rs = [8]
+# ONLY accumulation steps (this exists in your Namespace)
+GRAD_ACC_STEPS = 2
 
-contrastive_ratios = list(range(25, 42, 2))   # 25,27,...,41  -> 0.25..0.41
-kl_ratios = list(range(250, 421, 20))         # 250,270,...,410 -> 0.25..0.41
+# how many Optuna trials
+N_TRIALS = 10
 
-# ==============================================================
-# Base settings
-# ==============================================================
-
-pretrain = "Salesforce/codegen-2B-multi"
-model_type = "lora"
-base = "2b"
-num_train_epochs = "5"
-
-# how many runs (attempts)
-N_TRIALS = 30
-
-trained_root = Path("../trained")
-
+# where train.py writes runs (relative to /scripts)
+TRAINED_ROOT = Path("../trained")
 
 # ==============================================================
-# Helpers
+# Search spaces (EDIT THESE LISTS)
 # ==============================================================
+
+# ---- LoRA / training hyperparameters ----
+LEARNING_RATES = [1e-4]
+LORA_RS = [8]
+LORA_DROPOUTS = [0.1]
+LORA_TARGET_MODULES = [
+    "qkv_proj",
+]
+
+# ---- Objective weights (RAW ratios passed to train.py) ----
+# trainer scaling:
+#   contrastive_loss *= con/100
+#   kl_loss         *= kl/1000
+#   lm_loss         *= lm (direct)
+
+CONTRASTIVE_RATIOS = list(range(25, 42, 2))   # /100  -> 0.25..0.41
+KL_RATIOS = list(range(250, 421, 20))         # /1000 -> 0.25..0.41
+
+# ==============================================================
+# Log parsing
+# ==============================================================
+
+# Matches: "val epoch 5: ... , loss: 0.4992"
+_VAL_TOTAL_RE = re.compile(r"val epoch \d+:[^\n]*,\s*loss:\s*([0-9]*\.?[0-9]+)")
 
 def extract_final_val_loss(log_path: Path) -> float:
-    """
-    Parse the LAST TOTAL validation loss from a line like:
-      "val epoch 5: ... , loss: 0.4992"
-    """
+    """Parse the LAST TOTAL validation loss from train.log."""
     text = log_path.read_text(errors="ignore")
-
-    # IMPORTANT: match ", loss:" (the final total loss), not "lm_loss:"
-    vals = re.findall(r"val epoch \d+:[^\n]*,\s*loss:\s*([0-9]*\.?[0-9]+)", text)
-
+    vals = _VAL_TOTAL_RE.findall(text)
     if not vals:
         raise ValueError(f"No 'val epoch ... , loss:' found in {log_path}")
-
     return float(vals[-1])
 
 def cleanup_epoch_checkpoints(run_dir: Path) -> None:
-    """
-    Delete checkpoint-epoch-* directories to save disk, but keep:
-      - checkpoint-last
-      - train.log
-    """
+    """Delete checkpoint-epoch-* dirs, keep checkpoint-last + train.log."""
     if not run_dir.exists():
         return
-
     removed = 0
     for p in run_dir.iterdir():
         if p.is_dir() and p.name.startswith("checkpoint-epoch-"):
             subprocess.run(["rm", "-rf", str(p)], check=False)
             removed += 1
-
-    if removed > 0:
+    if removed:
         print(f"[CLEANUP] Removed {removed} epoch checkpoints under {run_dir}\n")
 
+def run_train_and_log(cmd: list[str], log_path: Path) -> None:
+    """Run train.py, streaming stdout to both terminal and train.log."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "w") as f:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="")
+            f.write(line)
+        process.wait()
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, cmd)
+
 # ==============================================================
-# Objective: choose params -> run train.py -> return final val loss
+# Objective
 # ==============================================================
 
 def objective(trial: optuna.Trial) -> float:
-    lr = trial.suggest_categorical("learning_rate", learning_rates)
-    r = trial.suggest_categorical("lora_r", lora_rs)
-    con = trial.suggest_categorical("contrastive_loss_ratio", contrastive_ratios)
-    kl = trial.suggest_categorical("kl_loss_ratio", kl_ratios)
+    # -----------------------------
+    # (A) sample LoRA/training hparams
+    # -----------------------------
+    lr = trial.suggest_categorical("learning_rate", LEARNING_RATES)
+    lora_r = trial.suggest_categorical("lora_r", LORA_RS)
+    lora_dropout = trial.suggest_categorical("lora_dropout", LORA_DROPOUTS)
+    target_modules = trial.suggest_categorical("lora_target_modules", LORA_TARGET_MODULES)
 
-    # enforce: lm + con/100 + kl/1000 = 1
+    # Your rule: alpha = 2 * rank
+    lora_alpha = 2 * int(lora_r)
+
+    # -----------------------------
+    # (B) sample objective weights
+    # -----------------------------
+    con = trial.suggest_categorical("contrastive_loss_ratio", CONTRASTIVE_RATIOS)
+    kl = trial.suggest_categorical("kl_loss_ratio", KL_RATIOS)
+
     con_w = con / 100.0
     kl_w = kl / 1000.0
     lm = 1.0 - con_w - kl_w
 
     if lm < 0:
         raise optuna.TrialPruned(
-            f"Infeasible weights: lm={lm:.4f} (con={con_w:.4f}, kl={kl_w:.4f})"
+            f"Infeasible weights: lm={lm:.4f} (ct={con_w:.4f}, kl={kl_w:.4f})"
         )
 
-    run_name = f"{base}-lr{lr}_r{r}_lm{lm:.3f}_con{con}_kl{kl}"
-    run_dir = trained_root / run_name
+    # Tag targets safely for path naming
+    tgt_tag = target_modules.replace(",", "+").replace("/", "_")
+
+    # Make lr readable & filesystem-safe
+    lr_tag = f"{lr:.0e}" if lr < 0.001 else f"{lr}".replace(".", "p")
+
+    # Include accumulation steps in run_name to avoid collisions
+    run_name = (
+        f"{BASE_TAG}-ep{NUM_TRAIN_EPOCHS}"
+        f"-lr{lr_tag}"
+        f"_r{lora_r}_a{lora_alpha}_ld{lora_dropout}"
+        f"_t{tgt_tag}"
+        f"_ga{GRAD_ACC_STEPS}"
+        f"_lm{lm:.3f}_con{con}_kl{kl}"
+    )
+
+    run_dir = TRAINED_ROOT / run_name
     log_path = run_dir / "train.log"
 
     cmd = [
         "python", "train.py",
         "--output_name", run_name,
-        "--model_type", model_type,
-        "--pretrain_dir", pretrain,
+        "--model_type", MODEL_TYPE,
+        "--pretrain_dir", PRETRAIN_DIR,
+
         "--learning_rate", str(lr),
-        "--lora_r", str(r),
+
+        "--lora_r", str(lora_r),
+        "--lora_alpha", str(lora_alpha),
+        "--lora_dropout", str(lora_dropout),
+        "--lora_target_modules", target_modules,
+
         "--contrastive_loss_ratio", str(con),
         "--kl_loss_ratio", str(kl),
         "--lm_loss_ratio", str(lm),
-        "--num_train_epochs", num_train_epochs,
+
+        "--num_train_epochs", str(NUM_TRAIN_EPOCHS),
+
+        # ONLY use existing argument from your Namespace
+        "--grad_acc_steps", str(GRAD_ACC_STEPS),
     ]
 
     print("===================================================")
     print(f"▶ Running experiment: {run_name}")
     print("Command:", " ".join(cmd))
     print("Saving into:", f"../trained/{run_name}")
-    print("Weights:",
-          f"lm={lm:.3f}, ct={con_w:.3f}, kl={kl_w:.3f} (sum={lm+con_w+kl_w:.3f})")
+    print("LoRA:", f"lr={lr} r={lora_r} alpha={lora_alpha} dropout={lora_dropout} targets={target_modules}")
+    print("Weights:", f"lm={lm:.3f}, ct={con_w:.3f}, kl={kl_w:.3f} (sum={lm+con_w+kl_w:.3f})")
+    print("Accum:", f"grad_acc_steps={GRAD_ACC_STEPS}")
     print("===================================================\n")
 
-    # run training (skip if already done and train.log exists)
+    # Run (skip if already exists)
     if log_path.exists():
         print(f"[INFO] train.log exists; skipping training: {log_path}\n")
     else:
         run_dir.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "w") as f:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            for line in process.stdout:
-                print(line, end="")   # ターミナルに表示
-                f.write(line)         # train.log に保存
-            process.wait()
-            if process.returncode != 0:
-                raise subprocess.CalledProcessError(process.returncode, cmd)
+        run_train_and_log(cmd, log_path)
 
-
-    # NEW: delete checkpoint-epoch-* dirs (keep checkpoint-last + train.log)
     cleanup_epoch_checkpoints(run_dir)
-    
-    # score = final val loss
+
+    # Score = final val loss
     val_loss = extract_final_val_loss(log_path)
 
+    # Save helpful info
     trial.set_user_attr("run_name", run_name)
     trial.set_user_attr("lm_weight", lm)
     trial.set_user_attr("ct_weight", con_w)
     trial.set_user_attr("kl_weight", kl_w)
     trial.set_user_attr("final_val_loss", val_loss)
 
+    # Store chosen hparams too
+    trial.set_user_attr("learning_rate", lr)
+    trial.set_user_attr("lora_r", lora_r)
+    trial.set_user_attr("lora_alpha", lora_alpha)
+    trial.set_user_attr("lora_dropout", lora_dropout)
+    trial.set_user_attr("lora_target_modules", target_modules)
+
+    # Store accumulation too
+    trial.set_user_attr("grad_acc_steps", GRAD_ACC_STEPS)
+
     print(f"[RESULT] trial={trial.number} final_val_loss={val_loss:.6f}\n")
     return val_loss
-
 
 # ==============================================================
 # Main
@@ -172,15 +212,17 @@ if __name__ == "__main__":
         sampler=optuna.samplers.TPESampler(seed=42),
     )
 
-    # Start from (lm, ct, kl) ≈ (0.34, 0.33, 0.33)
-    # ct=33 -> 0.33, kl=330 -> 0.33, lm=1-0.33-0.33=0.34
-    # IMPORTANT: these values must be included in candidate lists above.
-    if 33 in contrastive_ratios and 330 in kl_ratios:
+    # Optional: enqueue one starting point (if it exists in your spaces)
+    # Here: lr=1e-4, r=8 -> alpha=16, dropout=0.1, targets=out_proj, con=30, kl=400
+    if (1e-4 in LEARNING_RATES and 8 in LORA_RS and 0.1 in LORA_DROPOUTS
+        and "out_proj" in LORA_TARGET_MODULES and 30 in CONTRASTIVE_RATIOS and 400 in KL_RATIOS):
         study.enqueue_trial({
             "learning_rate": 1e-4,
             "lora_r": 8,
-            "contrastive_loss_ratio": 33,
-            "kl_loss_ratio": 330,
+            "lora_dropout": 0.1,
+            "lora_target_modules": "out_proj",
+            "contrastive_loss_ratio": 30,
+            "kl_loss_ratio": 400,
         })
 
     study.optimize(objective, n_trials=N_TRIALS)
@@ -190,11 +232,20 @@ if __name__ == "__main__":
     if not completed:
         print("No completed trials.")
     else:
-        print("Best value (min val loss):", study.best_value)
+        bt = study.best_trial
+        print("Best value (min final val loss):", study.best_value)
         print("Best params:", study.best_params)
-        print("Best run_name:", study.best_trial.user_attrs.get("run_name"))
+        print("Best run_name:", bt.user_attrs.get("run_name"))
         print("Best weights:",
-              "lm=", study.best_trial.user_attrs.get("lm_weight"),
-              "ct=", study.best_trial.user_attrs.get("ct_weight"),
-              "kl=", study.best_trial.user_attrs.get("kl_weight"))
+              "lm=", bt.user_attrs.get("lm_weight"),
+              "ct=", bt.user_attrs.get("ct_weight"),
+              "kl=", bt.user_attrs.get("kl_weight"))
+        print("Best LoRA:",
+              "lr=", bt.user_attrs.get("learning_rate"),
+              "r=", bt.user_attrs.get("lora_r"),
+              "alpha=", bt.user_attrs.get("lora_alpha"),
+              "dropout=", bt.user_attrs.get("lora_dropout"),
+              "targets=", bt.user_attrs.get("lora_target_modules"))
+        print("Accum:",
+              "grad_acc_steps=", bt.user_attrs.get("grad_acc_steps"))
     print("=============================================\n")

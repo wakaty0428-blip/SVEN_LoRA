@@ -23,9 +23,9 @@ learning_rates = [0.01]
 # prefix tokens to try
 n_prefix_tokens = [16]
 
-# Focus around balanced region (effective weights ~0.25..0.41)
 contrastive_ratios = list(range(25, 42, 2))   # /100  -> 0.25..0.41
 kl_ratios = list(range(250, 421, 20))         # /1000 -> 0.25..0.41
+
 
 # ==============================================================
 # Base settings
@@ -37,7 +37,7 @@ base = "2b"
 num_train_epochs = "5"
 
 # how many runs (attempts)
-N_TRIALS = 30
+N_TRIALS = 10
 
 trained_root = Path("../trained")
 
@@ -100,7 +100,7 @@ def objective(trial: optuna.Trial) -> float:
             f"Infeasible weights: lm={lm:.4f} (con={con_w:.4f}, kl={kl_w:.4f})"
         )
 
-    run_name = f"{base}-lr{lr}_p{npt}_lm{lm:.3f}_con{con}_kl{kl}"
+    run_name = f"{base}-ep{num_train_epochs}-lr{lr}_p{npt}_lm{lm:.3f}_con{con}_kl{kl}"
     run_dir = trained_root / run_name
     log_path = run_dir / "train.log"
 
@@ -172,12 +172,10 @@ if __name__ == "__main__":
     )
 
     # Start from (lm, ct, kl) = (0.34, 0.33, 0.33)  -> con=33, kl=330
-    if 33 in contrastive_ratios and 330 in kl_ratios:
+    if 30 in contrastive_ratios and 400 in kl_ratios:
         study.enqueue_trial({
-            "learning_rate": 0.01,
-            "n_prefix_token": 16,
-            "contrastive_loss_ratio": 33,
-            "kl_loss_ratio": 330,
+            "contrastive_loss_ratio": 30,
+            "kl_loss_ratio": 400,
         })
 
     study.optimize(objective, n_trials=N_TRIALS)
