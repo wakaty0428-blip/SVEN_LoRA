@@ -439,7 +439,14 @@ class LoraEvaler(EvalerBase):
         print("=== Adapter loaded successfully ===")
         self.model = model
         self.model.eval()
-        self.model.to(self.input_device)
+        # self.model.to(self.input_device)
+
+        try:
+            emb = self.model.get_input_embeddings()
+        except AttributeError:
+            emb = self.model.base_model.get_input_embeddings()
+        self.input_device = emb.weight.device
+        print(f"[INFO] input_device = {self.input_device}")
 
     # ============================================================
     # Sampling (no switching!)
