@@ -20,8 +20,8 @@ SVEN currently supports [CodeGen](https://arxiv.org/abs/2203.13474), [InCoder](h
 ## Setup
 Set up Python dependencies (a virtual environment is recommended) and [GitHub CodeQL](https://github.com/github/codeql):
 ```console
-$ pip install -r requirements.txt
-$ pip install -e .
+$ uv pip install -r requirements.txt
+$ uv pip install -e .
 $ ./setup_codeql.sh
 ```
 
@@ -35,7 +35,7 @@ $ python train.py --model_type prefix --output_name 350m-prefix-new --pretrain_d
 ```
 To train **LoRA-based** SVEN, run:
 ```console
-$ python train.py --output_name 350m-lora-new --pretrain_dir 'Salesforce/codegen-350M-multi' --model_type lora --learning_rate 1e-4 --lora_r 8 --kl_loss_ratio 330 --contrastive_loss_ratio 33 --lm_loss_ratio 0.34 --num_train_epochs 5
+$ python train.py --model_type lora --output_name 350m-lora-new --pretrain_dir 'Salesforce/codegen-350M-multi' 
 ```
 
 To train effectively, **bayesian-search** is popular, so this command below is an example;
@@ -47,11 +47,6 @@ $ python bayesian_train_prefix.py
 ```
 However, plaese note that if you want to change hyperparameters or whatever, you have to change this scripts a bit.
 
-Computation time is calculated by running this file as an example;
-```console
-$ python comp_time.py --patterns "2b-lr0.01_p16_*" "2b-lr0.0001_r8_*"
-```
-This file also allows us to get a box -plot represents each method computation time.
 
 ## Evaluation
 The evaluation consists of two parts: security and functional correctness. You should run the evaluation scripts under the `./scripts` directory. Make sure to use `CUDA_VISIBLE_DEVICES` to select the correct GPUs. Specifically, training does not matter what GPUs are used, but when it comes to evaluation, you have to do experiments with only one GPU.
@@ -79,7 +74,7 @@ Use `print_results.py` to obtain the evaluation results. An example command for 
 $ python print_results.py --eval_dir ../experiments/sec_eval/sec-eval-350m-lm
 ```
 
-I also created useful file to run both security rate evaluation and print at the same time shown as below;
+For running these steps from running `sec_eval.py` to running `print_results.py` in a sequence, I also created useful file to run both security rate evaluation and print at the same time shown as below;
 ```console
 $ python grid_sec_eval_lora.py
 ```
@@ -126,7 +121,7 @@ To view the results (for the original LLM for example), run:
 $ python print_results.py --eval_type human_eval --eval_dir ../experiments/human_eval/human-eval-350m-lm
 ```
 
-I also created useful file to run both functional correctness evaluation and print at the same time shown as below;
+For running these steps from running `human_eval_gen.py` and `human_eval_exec.py` to running `print_results.py` in a sequence, I also created useful file to run both functional correctness evaluation and print at the same time shown as below;
 ```console
 $ python grid_human_eval_lora.py
 ```
@@ -139,10 +134,18 @@ Use `box_plots_fc.py` to obtain the box plot for functional correctness.
 $ python box_plots_fc.py --scripts_dir 350m --method both --control sec --out fc_sec_prefix_vs_lora.png
 ```
 
-Finally, the score that means average of the sum of security rate and functional correctness is calculated and shown as a box plot running this command;
+Finally, the score that calculates the average of the sum of security rate and functional correctness is calculated and shown as a box plot running this command;
 ```console
 $ python box_plots_score.py --scripts_dir 350m --method both --control sec --out score_sec.png
 ```
+
+## Optional files
+### Computation time
+Computation time is calculated by running this file as an example;
+```console
+$ python comp_time.py --patterns "2b-lr0.01_p16_*" "2b-lr0.0001_r8_*"
+```
+This file also allows us to get a box -plot represents each method computation time.
 
 ## Citation
 ```
