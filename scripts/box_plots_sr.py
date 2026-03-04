@@ -224,7 +224,7 @@ def main():
         print(f"        control     = {c} (Original uses orig regardless)")
         return
 
-    title = f"Overall Security Rate Distribution ({c})"
+    title = f"Overall Security Rate Distribution"
     out_path = prepare_output_path(scripts_dir, args.out)
     make_boxplot(plot_data, plot_labels, out_path, title=title)
     print(f"\nSaved plot → {out_path}")
