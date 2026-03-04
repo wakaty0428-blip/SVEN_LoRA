@@ -82,19 +82,6 @@ $ python grid_sec_eval_lora.py
 $ python grid_sec_eval_prefix.py
 ```
 
-Use `make_graph_sr.py` to obtain the bar graphs. An example command for the **LoRA-based** SVEN is:
-```console
-$ python make_graph_sr.py --mode lora --lm_txt sr-350m-lm.txt --lora_sec_txt 350m-lr0.0001_r8_lm0.400_con35_kl250-sec.txt --lora_vul_txt 350m-lr0.0001_r8_lm0.400_con35_kl250-vul.txt --out_dir figures_lora --tag 350m-lr0.0001_r8_lm0.400_con35_kl250
-```
-When it comes to obtain the **prefix-based** bar graphs, you can run the command below:
-```console
-$ python make_graph_sr.py --mode prefix --lm_txt sr-350m-lm.txt --prefix_txt 350m-lr0.01_p16_lm0.360_con27_kl370.txt --out_dir figures_prefix --tag 350m-lr0.01_p16_lm0.360_con27_kl370
-```
-
-Use `box_plots_sr.py` to obtain the box plot for security rate. 
-```console
-$ python box_plots_sr.py --scripts_dir 350m --method both --control sec --out sr_sec_prefix_vs_lora.png
-```
 
 ### Evaluation on Functional Correctness
 We use [the HumanEval benchmark](https://github.com/openai/human-eval) from [the MultiPL-E framework](https://github.com/nuprl/MultiPL-E/tree/dbcfa139a66cf5e46de798fa5e0854a7f417a046) to evaluate functional correctness. To evaluate the original LLM, run the command below. Check `human_eval_gen.py` for other generation arguments.
@@ -129,15 +116,7 @@ $ python grid_human_eval_lora.py
 $ python grid_human_eval_prefix.py
 ```
 
-Use `box_plots_fc.py` to obtain the box plot for functional correctness. 
-```console
-$ python box_plots_fc.py --scripts_dir 350m --method both --control sec --out fc_sec_prefix_vs_lora.png
-```
 
-Finally, the score that calculates the average of the sum of security rate and functional correctness is calculated and shown as a box plot running this command;
-```console
-$ python box_plots_score.py --scripts_dir 350m --method both --control sec --out score_sec.png
-```
 
 ## Optional files
 ### Computation time
@@ -146,6 +125,32 @@ Computation time is calculated by running this file as an example;
 $ python comp_time.py --patterns "2b-lr0.01_p16_*" "2b-lr0.0001_r8_*"
 ```
 This file also allows us to get a box -plot represents each method computation time.
+
+### Bar graph
+Use `make_graph_sr.py` to obtain the bar graphs of security rate. An example command for the **LoRA-based** SVEN is:
+```console
+$ python make_graph_sr.py --mode lora --lm_txt sr-350m-lm.txt --lora_sec_txt 350m-lr0.0001_r8_lm0.400_con35_kl250-sec.txt --lora_vul_txt 350m-lr0.0001_r8_lm0.400_con35_kl250-vul.txt --out_dir figures_lora --tag 350m-lr0.0001_r8_lm0.400_con35_kl250
+```
+When it comes to obtain the **prefix-based** bar graphs, you can run the command below:
+```console
+$ python make_graph_sr.py --mode prefix --lm_txt sr-350m-lm.txt --prefix_txt 350m-lr0.01_p16_lm0.360_con27_kl370.txt --out_dir figures_prefix --tag 350m-lr0.01_p16_lm0.360_con27_kl370
+```
+
+### Box-Plot
+Use `box_plots_sr.py` to obtain the box plot for security rate. 
+```console
+$ python box_plots_sr.py --scripts_dir 350m --method both --control sec --out sr_sec_prefix_vs_lora.png
+```
+Use `box_plots_fc.py` to obtain the box plot for functional correctness. 
+```console
+$ python box_plots_fc.py --scripts_dir 350m --method both --control sec --out fc_sec_prefix_vs_lora.png
+```
+
+### Score
+Finally, the score that calculates the average of the sum of security rate and functional correctness is shown as a box plot running this command;
+```console
+$ python box_plots_score.py --scripts_dir 350m --method both --control sec --out score_sec.png
+```
 
 ## Citation
 ```
