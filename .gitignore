@@ -6,7 +6,15 @@
 /scripts/figures_by_cwe/
 /scripts/figures_lora/
 /scripts/figures_prefix/
-/scripts/350m/
+/scripts/loss_figures/
+/scripts/350m_draft/
+/scripts/350m_check/
+/scripts/350m_final/
+/scripts/2b_draft/
+/scripts/2b_final/
+/scripts/6b_draft/
+/scripts/6b_final/
+/scripts/*.txt
 
 # Ignore large auto-generated or downloadable files
 **/codeql-linux64.zip
@@ -49,7 +57,6 @@ trained/
 **/experiments/sec_eval/
 **/experiments/human_eval/
 **/experiments/
-*.txt
 
 *.zip
 *.7z
