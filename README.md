@@ -139,17 +139,17 @@ $ python make_graph_sr.py --mode prefix --lm_txt sr-350m-lm.txt --prefix_txt 350
 ### Box-Plot
 Use `box_plots_sr.py` to obtain the box plot for security rate. 
 ```console
-$ python box_plots_sr.py --scripts_dir 350m --method both --control sec --out sr_sec_prefix_vs_lora.png
+$ python box_plots_sr.py --scripts_dir 350m --control sec --out sr_sec_original_prefix_lora.png
 ```
 Use `box_plots_fc.py` to obtain the box plot for functional correctness. 
 ```console
-$ python box_plots_fc.py --scripts_dir 350m --method both --control sec --out fc_sec_prefix_vs_lora.png
+$ python box_plots_fc.py --scripts_dir 350m --control sec --out fc_sec_orig_prefix_lora.png
 ```
 
 ### Score
 Finally, the score that calculates the average of the sum of security rate and functional correctness is shown as a box plot running this command;
 ```console
-$ python box_plots_score.py --scripts_dir 350m --method both --control sec --out score_sec.png
+$ python box_plots_score.py --scripts_dir 350m --control sec --out score_sec_original_prefix_lora.png
 ```
 
 ## Citation
