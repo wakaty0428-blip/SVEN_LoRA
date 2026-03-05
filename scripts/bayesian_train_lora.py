@@ -1,3 +1,124 @@
+# ==============================================================
+# bayesian_train_lora.py
+#
+# Purpose
+#   Perform hyperparameter optimization for LoRA fine-tuning using
+#   Bayesian optimization (Optuna). Instead of testing all combinations
+#   like a grid search, this script intelligently selects promising
+#   hyperparameter configurations to minimize the validation loss.
+#
+# Overview
+#   Each Optuna trial performs the following steps:
+#
+#     1. Sample hyperparameters from predefined search spaces
+#          - learning rate
+#          - LoRA rank (r)
+#          - LoRA dropout
+#          - LoRA target modules (e.g. qkv_proj, out_proj)
+#
+#     2. Sample multi-objective loss weights
+#          - contrastive_loss_ratio
+#          - kl_loss_ratio
+#
+#        The LM loss weight is computed automatically so that:
+#
+#            lm + (contrastive / 100) + (kl / 1000) = 1
+#
+#        If lm becomes negative (invalid weight combination),
+#        the trial is pruned and skipped.
+#
+#     3. Construct a unique run name encoding all hyperparameters
+#
+#        Example:
+#
+#        2b-ep5-lr1e-04_r8_a16_ld0.1_tqkv_proj_ga2_lm0.300_con30_kl400
+#
+#     4. Execute train.py with those parameters
+#
+#     5. Stream training logs to:
+#
+#           ../trained/<run_name>/train.log
+#
+#     6. After training finishes:
+#           - delete checkpoint-epoch-* directories to save disk
+#           - keep checkpoint-last and train.log
+#
+#     7. Parse the final validation loss from train.log
+#
+#     8. Return this validation loss to Optuna as the optimization score
+#
+# Optimization objective
+#   The study minimizes the final validation loss reported by train.py.
+#
+# Key differences from grid_train_lora.py
+#
+#   grid_train_lora.py
+#       - evaluates ALL combinations
+#       - deterministic grid search
+#
+#   bayesian_train_lora.py
+#       - evaluates only N_TRIALS configurations
+#       - uses Optuna's TPE sampler to explore promising regions
+#
+# Configuration parameters
+#
+#   PRETRAIN_DIR
+#       Base model used for fine-tuning.
+#
+#   BASE_TAG
+#       Prefix used when constructing run names.
+#
+#   NUM_TRAIN_EPOCHS
+#       Number of training epochs per trial.
+#
+#   GRAD_ACC_STEPS
+#       Gradient accumulation steps passed to train.py.
+#
+#   N_TRIALS
+#       Number of Optuna trials to execute.
+#
+# Search spaces
+#
+#   LoRA hyperparameters
+#       LEARNING_RATES
+#       LORA_RS
+#       LORA_DROPOUTS
+#       LORA_TARGET_MODULES
+#
+#   Loss weights
+#       CONTRASTIVE_RATIOS
+#       KL_RATIOS
+#
+#   LM weight is computed automatically so the sum of weights is 1.
+#
+# Disk management
+#
+#   After each run:
+#       checkpoint-epoch-* directories are deleted to save storage.
+#
+#   Remaining files:
+#       checkpoint-last
+#       train.log
+#
+# Usage
+#
+#   Run the optimization:
+#
+#       python bayesian_train_lora.py
+#
+#   The script will run N_TRIALS experiments and print the best configuration
+#   (lowest validation loss) at the end.
+#
+# Output
+#
+#   Training outputs are stored under:
+#
+#       ../trained/<run_name>/
+#
+#   Optuna results (best parameters and scores) are printed to the terminal.
+#
+# ==============================================================
+
 import re
 import subprocess
 from pathlib import Path

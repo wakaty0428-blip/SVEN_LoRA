@@ -1,18 +1,66 @@
+# bayesian_train_prefix.py
+#
+# Purpose
+#   Run Bayesian hyperparameter search (Optuna) for Prefix-Tuning training.
+#   This is the PREFIX counterpart to bayesian_train_lora.py, designed to
+#   keep the workflow consistent across LoRA vs Prefix experiments.
+#
+# What this script does (per Optuna trial)
+#   1) Samples hyperparameters from the predefined search spaces:
+#        - learning rate (learning_rates)
+#        - prefix length p (n_prefix_tokens)  -> passed as --n_prefix_token
+#
+#   2) Samples multi-objective loss ratios (raw values passed to train.py):
+#        - contrastive_loss_ratio = con  (trainer uses con/100)
+#        - kl_loss_ratio          = kl   (trainer uses kl/1000)
+#
+#      Then computes lm_loss_ratio so that the EFFECTIVE weights satisfy:
+#
+#        lm + (con/100) + (kl/1000) = 1
+#
+#      If lm becomes negative, the combination is infeasible and the trial
+#      is pruned (skipped) to avoid wasting compute.
+#
+#   3) Builds a unique run_name encoding hyperparameters + weights, e.g.:
+#        2b-ep5-lr0.01_p16_lm0.300_con30_kl400
+#
+#   4) Runs train.py and streams stdout/stderr to:
+#        (a) the terminal (live), and
+#        (b) ../trained/<run_name>/train.log
+#
+#   5) After training finishes:
+#        - deletes checkpoint-epoch-* directories to save disk space
+#        - keeps checkpoint-last and train.log
+#
+#   6) Parses the FINAL TOTAL validation loss from train.log, matching:
+#        "val epoch X: ... , loss: <value>"
+#      This final total val loss is returned to Optuna as the objective score.
+#
+# Optimization objective
+#   Minimize final validation loss (lower is better).
+#
+# Skip behavior
+#   If ../trained/<run_name>/train.log already exists, the trial is treated
+#   as already completed and training is skipped; the script will parse the
+#   existing train.log and report the stored final val loss.
+#
+# Configuration knobs (edit near the top)
+#   - pretrain, base, num_train_epochs, N_TRIALS, trained_root
+#   - learning_rates, n_prefix_tokens, contrastive_ratios, kl_ratios
+#
+# Usage
+#   python bayesian_train_prefix.py
+#
+# Output
+#   Each trial writes to:
+#     ../trained/<run_name>/train.log
+#   and Optuna prints the best configuration at the end.
+# ==============================================================
 import re
 import subprocess
 from pathlib import Path
 
 import optuna
-
-# ==============================================================
-# Bayesian search (PREFIX version) — matched to bayesian_train_lora.py style
-# - Prints logs live to terminal AND saves them to train.log
-# - Uses FINAL TOTAL val loss (", loss: ...") as the Optuna metric
-# - Enforces sum-to-1 constraint on (lm, ct, kl) effective weights:
-#       lm + (con/100) + (kl/1000) = 1,  with lm >= 0
-# - Deletes checkpoint-epoch-* after each trial to save disk,
-#   while keeping checkpoint-last and train.log.
-# ==============================================================
 
 # ==============================================================
 # Hyperparameters (RAW ratios passed to train.py)
