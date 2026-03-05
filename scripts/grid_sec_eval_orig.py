@@ -1,3 +1,105 @@
+# ==============================================================
+# grid_sec_eval_orig.py
+#
+# Purpose
+#   Evaluate the SECURITY RATE of the ORIGINAL (base) language model
+#   using sec_eval.py and export summarized results into .txt files.
+#
+#   This script is used as the baseline evaluation (LM / original)
+#   to compare against fine-tuned models such as Prefix-Tuning and LoRA.
+#
+# Overview
+#   For each tag and trial index, the script performs the following:
+#
+#     1) Run sec_eval.py using the base model
+#          model_type = "lm"
+#          model_dir  = BASE
+#
+#        Example command:
+#
+#          python sec_eval.py \
+#              --model_type lm \
+#              --model_dir Salesforce/codegen-350M-multi \
+#              --output_name 350m-lm-1 \
+#              --pretrain_dir Salesforce/codegen-350M-multi \
+#              --temp 0.4 \
+#              --seed 1
+#
+#     2) sec_eval.py generates evaluation outputs under:
+#
+#          ../experiments/sec_eval/<output_name>/
+#
+#     3) Convert the evaluation results into a summarized TXT file:
+#
+#          python print_results.py --eval_dir <eval_folder> > <output_name>.txt
+#
+#        Example output:
+#
+#          350m-lm-1.txt
+#
+#     4) Delete the intermediate evaluation folder to save disk space.
+#
+#        Only the TXT summary file is kept.
+#
+# Skip behavior
+#   If the TXT result file already exists and is non-empty,
+#   the script skips that trial to avoid repeating the evaluation.
+#
+# Trial logic
+#   Each trial uses:
+#
+#       seed = trial index
+#
+#   so different random generations are evaluated across trials.
+#
+# Configuration parameters
+#
+#   BASE
+#       Base model used for evaluation.
+#
+#   SELECTED_TAGS
+#       Tags representing the model configuration being evaluated.
+#       For original models, typically something like:
+#
+#           "350m-lm"
+#
+#   DEFAULT_REPEATS
+#       Number of repeated evaluation trials.
+#
+#       Each trial produces:
+#
+#           <tag>-<trial>.txt
+#
+# Example outputs
+#
+#       350m-lm-1.txt
+#       350m-lm-2.txt
+#       ...
+#       350m-lm-10.txt
+#
+# Usage
+#
+#   Run with default number of trials:
+#
+#       python grid_sec_eval_orig.py
+#
+#   Specify number of trials:
+#
+#       python grid_sec_eval_orig.py --repeats 10
+#
+# Output files
+#
+#   TXT summaries are saved in the current scripts directory:
+#
+#       scripts/350m-lm-1.txt
+#       scripts/350m-lm-2.txt
+#       ...
+#
+#   Intermediate folders under ../experiments/sec_eval/ are deleted
+#   automatically after exporting results.
+#
+# ============================================================== 
+
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
 
