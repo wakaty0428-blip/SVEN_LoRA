@@ -1,4 +1,4 @@
-# Multi-Objective Fine-Tuning for Secure Code Generation: A Comparative Study of LoRA and Prefix-Tuning
+# Multi-Objective Fine-Tuning for Secure Code Generation: A Comparative Study of LoRA and Prefix-Tuning Methods
 
 SVEN enables controlling code LLMs to generate **secure code** (for security hardening) or **unsafe / vulnerable code** (for adversarial testing), while maintaining functional correctness. The original SVEN achieves this by learning **continuous prompts (prefixes)** with specialized loss terms on a curated security dataset. This repository extends SVEN by additionally supporting **LoRA-based security control** (separate `sec` / `vul` adapters), while keeping the original prefix-based pipeline and evaluation framework. For more technical details about the original SVEN, check the original SVEN [paper](https://arxiv.org/abs/2302.05319).
 
