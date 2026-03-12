@@ -11,12 +11,12 @@ X-axis labels are exactly:
   "Original", "Prefix", "LoRA"
 
 Security-rate txt situation:
-- Original LM: files like 350m-lm-1.txt ... 350m-lm-10.txt contain "orig" control:
+- Original LM: files like 6b-lm-1.txt ... 6b-lm-10.txt contain "orig" control:
     | overall | overall | orig | 58.6, ... |
 - Prefix: one txt file contains BOTH sec + vul rows
-    e.g., 350m-ep7-lr0.01_p8_lm0.180_con41_kl410-1.txt
+    e.g., 6b-ep7-lr0.01_p8_lm0.180_con41_kl410-1.txt
 - LoRA: files are split by control
-    e.g., 350m-ep7-...-sec-1.txt, 350m-ep7-...-vul-1.txt
+    e.g., 6b-ep7-...-sec-1.txt, 6b-ep7-...-vul-1.txt
 
 CLI:
 - --control : sec | vul
@@ -24,7 +24,7 @@ CLI:
 - --out : output PNG filename (saved under scripts_dir/box_plots/)
 
 Example (run from scripts/):
-  python box_plots_sr.py --scripts_dir 350m --control sec --out sr_sec_original_prefix_lora.png
+  python box_plots_sr.py --scripts_dir 6b --control sec --out sr_sec_original_prefix_lora.png
 """
 
 from __future__ import annotations
@@ -43,16 +43,16 @@ import matplotlib.pyplot as plt
 # =========================================================
 PATTERNS = {
     # NEW: original LM patterns (10 trials: 1..10)
-    # Change to "350m-lm-*.txt" if your LM files are named that way.
+    # Change to "6b-lm-*.txt" if your LM files are named that way.
     "original": {
-        "orig": ["350m-lm-*.txt"],
+        "orig": ["6b-lm-*.txt"],
     },
     "prefix": {
-        "any": ["350m-ep7-lr0.01_p16_lm0.180_con41_kl410-*.txt"],
+        "any": ["6b-lr0.01_p16_lm0.180_con41_kl410-*.txt"],
     },
     "lora": {
-        "sec": ["350m-ep7-lr1e-04_r8_a16_ld0.1_tqkv_lm0.180_con41_kl410-sec-*.txt"],
-        "vul": ["350m-ep7-lr1e-04_r8_a16_ld0.1_tqkv_lm0.180_con41_kl410-vul-*.txt"],
+        "sec": ["6b-ep5-lr0.0001_r8_a16_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410-sec-*.txt"],
+        "vul": ["6b-ep7-lr1e-04_r8_a16_ld0.1_tqkv_lm0.180_con41_kl410-vul-*.txt"],
     },
 }
 
@@ -196,7 +196,7 @@ def main():
     ap.add_argument(
         "--scripts_dir",
         default=".",
-        help="Directory containing the SR .txt files (e.g., ./scripts/350m or ./scripts/350m).",
+        help="Directory containing the SR .txt files (e.g., ./scripts/6b or ./scripts/6b).",
     )
     ap.add_argument(
         "--out",

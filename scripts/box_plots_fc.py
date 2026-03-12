@@ -9,8 +9,8 @@ Make 3 box plots of FUNCTIONAL CORRECTNESS (HumanEval pass@100):
   3) LoRA
 
 Original LM files:
-  human-eval-350m-lm-trial1-seed1.txt
-  human-eval-350m-lm-trial2-seed2.txt
+  human-eval-6b-lm-trial1-seed1.txt
+  human-eval-6b-lm-trial2-seed2.txt
   ...
 
 Fine-tuned files are split by control:
@@ -23,7 +23,7 @@ CLI:
 - --out : output PNG filename (saved under scripts_dir/box_plots/)
 
 Example (run from scripts/):
-  python box_plots_fc.py --scripts_dir 350m --control sec --out fc_sec_orig_prefix_lora.png
+  python box_plots_fc.py --scripts_dir 6b --control sec --out fc_sec_orig_prefix_lora.png
 """
 
 from __future__ import annotations
@@ -41,15 +41,15 @@ import matplotlib.pyplot as plt
 # =========================================================
 PATTERNS = {
     "original": {
-        "any": ["human-eval-350m-lm-trial*-seed*.txt"],
+        "any": ["human-eval-6b-lm-trial*-seed*.txt"],
     },
     "prefix": {
-        "sec": ["human-eval-350m-ep7-lr0.01_p16_lm0.180_con41_kl410-sec-trial*-seed*.txt"],
-        "vul": ["human-eval-350m-lr*_p*_lm*_con*_kl*-vul.txt"],
+        "sec": ["human-eval-6b-lr0.01_p16_lm0.180_con41_kl410-sec-trial*-seed*.txt"],
+        "vul": ["human-eval-6b-lr*_p*_lm*_con*_kl*-vul.txt"],
     },
     "lora": {
-        "sec": ["human-eval-350m-ep7-lr1e-04_r8_a16_ld0.1_tqkv_lm0.180_con41_kl410-sec-trial*-seed*.txt"],
-        "vul": ["human-eval-350m-lr*_r*_lm*_con*_kl*-vul.txt"],
+        "sec": ["human-eval-6b-ep5-lr0.0001_r8_a16_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410-sec-trial*-seed*.txt"],
+        "vul": ["human-eval-6b-lr*_r*_lm*_con*_kl*-vul.txt"],
     },
 }
 
