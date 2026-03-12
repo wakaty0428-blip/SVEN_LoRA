@@ -49,7 +49,7 @@ However, plaese note that if you want to change hyperparameters or whatever, you
 
 
 ## Evaluation
-The evaluation consists of two parts: security and functional correctness. You should run the evaluation scripts under the `./scripts` directory. Make sure to use `CUDA_VISIBLE_DEVICES` to select the correct GPUs. Specifically, training does not matter what GPUs are used, but when it comes to evaluation, you have to do experiments with only one GPU.
+The evaluation consists of two parts: security and functional correctness. You should run the evaluation scripts under the `./scripts` directory. Make sure to use `CUDA_VISIBLE_DEVICES` to select the correct GPUs. Specifically, training and security rate evaluation do not matter what GPUs are used, but when it comes to functional correctness evaluation, you have to do experiments with only one GPU.
 
 ### Evaluation on Security
 To evaluate the security of the original LLM, run the command below. The model `350m` can be replaced by {`2b`, `6b`}. See `sec_eval.py` for other options, such as using `--temp` to adjust temperature and using `--eval_type` to select the evaluation scenarios.
