@@ -107,10 +107,6 @@
 #
 # ============================================================== 
 
-
-import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"    # limit visible GPUs to avoid mismatch errors
-
 import argparse
 import subprocess
 import shutil
@@ -122,7 +118,9 @@ BASE = "Salesforce/codegen-6B-multi"  # change depending on base model
 # SPECIFY EXACT EXPERIMENTS YOU WANT TO EVALUATE
 # -------------------------------------------------------
 SELECTED_RUNS = [
-    "6b-ep5-lr0.0001_r4_a4_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410",
+    "6b-ep5-lr0.0001_r8_a8_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410",
+    "6b-ep5-lr0.0001_r4_a8_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410",
+
 ]
 
 # CONTROLS = ["sec", "vul"]  # evaluate both in this order
