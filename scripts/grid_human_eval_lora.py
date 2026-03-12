@@ -1,39 +1,42 @@
+### execute HumanEval with seed from 1 to 3
+
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"    # this is for limiting the cuda that prevent from seeing different cuda that will cause error
-import argparse
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # limit visible GPUs to avoid mismatch errors
+
 import subprocess
 import shutil
 from pathlib import Path
 
-BASE = "Salesforce/codegen-350M-multi"
+BASE = "Salesforce/codegen-6B-multi"
+
+# =======================================================
+# HumanEval generation config
+# =======================================================
+MAX_GEN_LEN = 200
+NUM_SAMPLES_PER_GEN = 10
+
+# =======================================================
+# Trial config (trial i -> seed i)
+# =======================================================
+NUM_TRIALS = 10  # trial 1->seed 1, trial 2->seed 2, ...
+
 
 # -------------------------------------------------------
 # SPECIFY EXACT EXPERIMENTS YOU WANT TO RUN HUMAN EVAL ON
 # -------------------------------------------------------
 SELECTED_RUNS = [
-    "350m-lr0.0001_r8_lm0.180_con41_kl410",
-    "350m-lr0.0001_r8_lm0.200_con41_kl390",
-    "350m-lr0.0001_r8_lm0.220_con39_kl390",
-    "350m-lr0.0001_r8_lm0.220_con41_kl370",
-    "350m-lr0.0001_r8_lm0.240_con35_kl410",
-    "350m-lr0.0001_r8_lm0.260_con39_kl350",
-    "350m-lr0.0001_r8_lm0.260_con41_kl330",
-    "350m-lr0.0001_r8_lm0.280_con31_kl410",
-    "350m-lr0.0001_r8_lm0.280_con41_kl310",
-    "350m-lr0.0001_r8_lm0.300_con29_kl410",
-    "350m-lr0.0001_r8_lm0.320_con29_kl390",
-    "350m-lr0.0001_r8_lm0.320_con33_kl350",
-    "350m-lr0.0001_r8_lm0.340_con33_kl330",
-    "350m-lr0.0001_r8_lm0.360_con25_kl390",
-    "350m-lr0.0001_r8_lm0.360_con27_kl370",
-    "350m-lr0.0001_r8_lm0.360_con37_kl270",
-    "350m-lr0.0001_r8_lm0.400_con31_kl290",
-    "350m-lr0.0001_r8_lm0.440_con27_kl290",
-    "350m-lr0.0001_r8_lm0.500_con25_kl250",
+    "6b-ep5-lr0.0001_r8_a8_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410",
+#    "6b-ep5-lr0.0001_r4_a4_ld0.1_tout_proj_wu0_ga2_lm0.180_con41_kl410",
+#    "6b-ep5-lr0.0001_r8_a8_ld0.1_tout_proj_wu0_ga2_lm0.180_con41_kl410",
+    "6b-ep5-lr0.0001_r4_a8_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410",
+    "6b-ep5-lr0.0001_r8_a16_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410",
+#    "6b-ep5-lr0.0001_r4_a8_ld0.1_tout_proj_wu0_ga2_lm0.180_con41_kl410",
+#    "6b-ep5-lr0.0001_r8_a16_ld0.1_tout_proj_wu0_ga2_lm0.180_con41_kl410",
 ]
 
 # Order matters: run sec first, then vul
-CONTROLS = ["sec", "vul"]
+# CONTROLS = ["sec", "vul"]
+CONTROLS = ["sec"]
 
 
 def run_cmd(cmd: str):
@@ -41,7 +44,15 @@ def run_cmd(cmd: str):
     subprocess.run(cmd, shell=True, check=True)
 
 
-def evaluate_human_eval(run_name: str, control: str):
+def evaluate_human_eval(run_name: str, control: str, trial_idx: int):
+    """
+    trial_idx is 1-indexed.
+      trial 1 -> seed 1
+      trial 2 -> seed 2
+      ...
+    """
+    seed = trial_idx
+
     run_dir = Path("../trained") / run_name
     ckpt = run_dir / "checkpoint-last"
     adapter_path = ckpt / control  # checkpoint-last/sec or checkpoint-last/vul
@@ -50,9 +61,19 @@ def evaluate_human_eval(run_name: str, control: str):
         print(f"[WARN] {run_name}: missing adapter folder <{control}> at {adapter_path}")
         return
 
-    # Output name should match your sec_eval naming style: "<run>-sec" / "<run>-vul"
-    output_name = f"{run_name}-{control}"
+    # Output name: include trial + seed for uniqueness
+    output_name = f"{run_name}-{control}-trial{trial_idx}-seed{seed}"
 
+    # ====================================================
+    # SKIP IF TXT ALREADY EXISTS
+    # ====================================================
+    scripts_dir = Path(".")
+    txt_path = scripts_dir / f"human-eval-{output_name}.txt"
+
+    if txt_path.exists():
+        print(f"[SKIP] TXT already exists → {txt_path.name}")
+        return
+    
     # ============================================
     # (1) RUN human_eval_gen.py
     # ============================================
@@ -62,7 +83,10 @@ def evaluate_human_eval(run_name: str, control: str):
         f"--model_dir {adapter_path} "
         f"--control {control} "
         f"--pretrain_dir '{BASE}' "
-        f"--output_name {output_name}"
+        f"--output_name {output_name} "
+        f"--max_gen_len {MAX_GEN_LEN} "
+        f"--num_samples_per_gen {NUM_SAMPLES_PER_GEN} "
+        f"--seed {seed}"
     )
     run_cmd(gen_cmd)
 
@@ -103,17 +127,26 @@ def evaluate_human_eval(run_name: str, control: str):
 
 
 def main():
-    print("===== HUMAN EVAL ON SELECTED RUNS =====")
+    print("===== HUMAN EVAL ON SELECTED RUNS (MULTI-TRIAL) =====")
     for name in SELECTED_RUNS:
         print(" -", name)
+
+    print(f"\n[CONFIG] max_gen_len={MAX_GEN_LEN}, num_samples_per_gen={NUM_SAMPLES_PER_GEN}")
+    print(f"[CONFIG] NUM_TRIALS={NUM_TRIALS} (trial i -> seed i)")
 
     for run_name in SELECTED_RUNS:
         print(f"\n=== Running HumanEval for {run_name} ===")
 
         for control in CONTROLS:
-            print(f"\n--- [{run_name}] START {control.upper()} ---")
-            evaluate_human_eval(run_name, control)
-            print(f"--- [{run_name}] DONE {control.upper()} ---")
+            for trial_idx in range(1, NUM_TRIALS -6):
+                # Optional skip example (update if you want per-trial skipping)
+                if run_name == "6b-ep3-lr0.0001_r8_lm0.280_con31_kl410" and control == "sec":
+                    print(f"[SKIP] {run_name} sec already evaluated (all trials skipped)")
+                    break
+
+                print(f"\n--- [{run_name}] START {control.upper()} trial={trial_idx} seed={trial_idx} ---")
+                evaluate_human_eval(run_name, control, trial_idx)
+                print(f"--- [{run_name}] DONE {control.upper()} trial={trial_idx} ---")
 
     print("\n===== ALL DONE =====")
 
