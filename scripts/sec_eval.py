@@ -10,7 +10,7 @@ from libcst.metadata import PositionProvider
 from libcst._position import CodePosition
 from collections import OrderedDict
 
-from sven.evaler import LMEvaler, PrefixEvaler, TextPromptEvaler, LoraEvaler    # lora version
+from sven.evaler import LMEvaler, PrefixEvaler, TextPromptEvaler, LoraEvaler, PromptTuningEvaler    # lora version
 from sven.utils import set_seed, set_logging, set_devices
 from sven.constant import BINARY_LABELS, MODEL_DIRS, CWES_DICT
 
@@ -47,7 +47,7 @@ def get_args():
 
     parser.add_argument('--eval_type', type=str, choices=['trained', 'trained_subset', 'prompts', 'gen_1', 'gen_2'], default='trained')
     parser.add_argument('--vul_type', type=str, default=None)
-    parser.add_argument('--model_type', type=str, choices=['lm', 'prefix', 'text', 'lora'], default='prefix')    # lora version
+    parser.add_argument('--model_type', type=str, choices=['lm', 'prefix', 'text', 'lora', 'prompt'], default='prefix')    # lora version
     parser.add_argument('--model_dir', type=str, default=None)
     parser.add_argument('--pretrain_dir', type=str, default=None)   # lora version
 
@@ -80,6 +80,10 @@ def get_evaler(args):
         controls = ['orig']
     elif args.model_type == 'prefix':
         evaler = PrefixEvaler(args)
+        controls = BINARY_LABELS
+    # prompt tuning version
+    elif args.model_type == 'prompt':       # ← 追加
+        evaler = PromptTuningEvaler(args)
         controls = BINARY_LABELS
     # lora version
     elif args.model_type == 'lora':
