@@ -5,7 +5,7 @@ import logging
 import argparse
 
 # lora version
-from sven.trainer import PrefixTrainer, TextPromptTrainer, LoraTrainer
+from sven.trainer import PrefixTrainer, TextPromptTrainer, LoraTrainer, PromptTuningTrainer
 from sven.utils import set_seed, set_logging, set_devices
 from sven.constant import MODEL_DIRS
 
@@ -15,7 +15,7 @@ def get_args():
 
     parser.add_argument('--data_dir', type=str, default='../data_train_val')
     parser.add_argument('--output_dir', type=str, default='../trained/')
-    parser.add_argument('--model_type', type=str, choices=['prefix', 'text', 'lora'], default='prefix') # lora version
+    parser.add_argument('--model_type', type=str, choices=['prefix', 'text', 'lora', 'prompt'], default='prefix') # lora version
     # ===== LoRA hyperparameters =====
     parser.add_argument('--lora_r', type=int, default=8)
     parser.add_argument('--lora_alpha', type=int, default=32)
@@ -27,6 +27,9 @@ def get_args():
     parser.add_argument('--vul_type', type=str, default=None)
 
     parser.add_argument('--n_prefix_token', type=int, default=None)
+
+    parser.add_argument('--n_prompt_token', type=int, default=None)
+
     parser.add_argument('--num_train_epochs', type=int, default=None)
     parser.add_argument('--kl_loss_ratio', type=int, default=None) # will be divided by 1000
     parser.add_argument('--learning_rate', type=float, default=None)
@@ -64,6 +67,17 @@ def get_args():
         else:
             assert False
 
+    # prompt tuning version
+    if args.n_prompt_token is None and args.model_type == 'prompt':
+        if args.pretrain_dir == 'Salesforce/codegen-350M-multi':
+            args.n_prompt_token = 5
+        elif args.pretrain_dir == 'Salesforce/codegen-2B-multi':
+            args.n_prompt_token = 8
+        elif args.pretrain_dir == 'Salesforce/codegen-6B-multi':
+            args.n_prompt_token = 12
+        else:
+            assert False
+
     if args.num_train_epochs is None:
         if args.pretrain_dir == 'Salesforce/codegen-350M-multi':
             args.num_train_epochs = 8
@@ -87,15 +101,15 @@ def get_args():
     if args.model_type == 'prefix':
         if args.learning_rate is None:
             args.learning_rate = 1e-2
-
-        if args.contrastive_loss_ratio == 0:
-            args.learning_rate = 5e-2
-            args.grad_acc_steps = args.grad_acc_steps * 2
-
-        if args.model_type == 'prefix' and args.diff_level in ('prog', 'line'):
-            args.learning_rate = 1e-3
+        ...
     elif args.model_type == 'text':
         args.learning_rate = 5e-5
+    elif args.model_type == 'prompt':       # ← 追加
+        if args.learning_rate is None:
+            args.learning_rate = 1e-2
+    elif args.model_type == 'lora':
+        if args.learning_rate is None:
+            args.learning_rate = 1e-4
 
     args.output_dir = os.path.join(args.output_dir, args.output_name)
     return args
@@ -112,6 +126,8 @@ def main():
         trainer = TextPromptTrainer(args)
     elif args.model_type == 'lora':
         trainer = LoraTrainer(args)   # lora version
+    elif args.model_type == 'prompt':       # ← 追加
+        trainer = PromptTuningTrainer(args)
     else:
         raise NotImplementedError()
 
