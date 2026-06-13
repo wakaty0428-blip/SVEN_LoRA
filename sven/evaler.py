@@ -478,6 +478,34 @@ class LoraEvaler(EvalerBase):
 
         return self.process_completions(input_src, input_ids_len, gen_output, lang)
 
+# prompt tuning version
+class PromptTuningEvaler(EvalerBase):
+    def __init__(self, args):
+        super().__init__(args)
+
+    def load_model(self):
+        self.tokenizer, self.model, self.input_device = load_model(
+            'prompt', self.args.model_dir, False, self.args
+        )
+        self.model.eval()
+
+    def sample(self, file_context, func_context, control, lang):
+        input_src = file_context + func_context
+        input_ids = self.tokenizer(input_src, return_tensors='pt').input_ids.to(self.input_device)
+        input_ids_len = input_ids.shape[1]
+        gen_output = self.model.generate(
+            input_ids,
+            do_sample=True,
+            num_return_sequences=self.args.num_gen,
+            temperature=self.args.temp,
+            max_new_tokens=self.args.max_gen_len,
+            top_p=self.args.top_p,
+            pad_token_id=self.tokenizer.pad_token_id,
+            use_cache=True,
+            control_id=control,
+        )
+        return self.process_completions(input_src, input_ids_len, gen_output, lang)
+
 class TextPromptEvaler(EvalerBase):
     def __init__(self, args):
         super().__init__(args)
