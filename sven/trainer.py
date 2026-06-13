@@ -267,6 +267,18 @@ def get_logits_from_lm(lm, inputs, control_ids):
     shift_probs = F.softmax(shift_logits, dim=-1)
     return shift_logits.squeeze(0), torch.gather(shift_probs, 2, shift_labels).squeeze(-1).squeeze(0)
 
+# prompt tuning version
+def get_logits_from_prompt_lm(lm, inputs, control_ids):
+    n_prompt = lm.config.n_prompt_token
+    control_id = control_ids[0].item()
+    outputs = lm(inputs, control_id=control_id)
+    # logits shape: (batch, n_prompt + seq, vocab)
+    # n_prompt 分ずらして実トークンの予測だけ取り出す
+    shift_logits = outputs.logits[:, n_prompt:-1, :]
+    shift_labels = inputs[..., 1:].unsqueeze(-1)
+    shift_probs = F.softmax(shift_logits, dim=-1)
+    return shift_logits.squeeze(0), torch.gather(shift_probs, 2, shift_labels).squeeze(-1).squeeze(0)
+
 # lora version
 def get_logits_from_lora_lm(model, inputs):
 
@@ -579,5 +591,72 @@ class LoraTrainer(TrainerBase):
         return_dict['loss'] = loss.item()
         return loss, return_dict
 
+# prompt tuning version
+class PromptTuningTrainer(TrainerBase):
+    def __init__(self, args):
+        super().__init__(args)
 
+    def load_model(self):
+        self.tokenizer, self.model, self.input_device = load_model(
+            'prompt', self.args.pretrain_dir, True, self.args
+        )
+
+        for n, p in self.model.named_parameters():
+            if n == 'prompt_params':
+                p.requires_grad = True
+            else:
+                p.requires_grad = False
+        self.model.train()
+
+    def load_dataset(self):
+        self.dataset = PrefixDataset(self.args, self.tokenizer, 'train')
+        self.val_dataset = PrefixDataset(self.args, self.tokenizer, 'val')
+
+    def step(self, batch):
+        return_dict = OrderedDict()
+        inputs, weights, control_ids, _ = batch
+        inputs = inputs.to(self.input_device)
+        shift_inputs = inputs[..., 1:].squeeze(0)
+        weights = weights.to(self.input_device)
+        shift_weights = weights[..., 1:].squeeze(0)
+        control_ids = control_ids.to(self.input_device)
+
+        correct_logits, correct_label_probs = get_logits_from_prompt_lm(self.model, inputs, control_ids)
+        lm_loss = token_weighted_loss('cross_entropy', correct_logits, shift_inputs, shift_weights)
+        lm_loss *= self.args.lm_loss_ratio
+        return_dict['lm_loss'] = lm_loss.item()
+
+        if self.args.contrastive_loss_ratio != 0 or self.args.kl_loss_ratio != 0:
+            incorrect_control_ids = -1 * (control_ids - 1)
+            incorrect_logits, incorrect_label_probs = get_logits_from_prompt_lm(
+                self.model, inputs, incorrect_control_ids
+            )
+
+            contrastive_loss = 0
+            if self.args.contrastive_loss_ratio != 0:
+                contrastive_probs = torch.stack((correct_label_probs, incorrect_label_probs), dim=1)
+                contrastive_probs = F.normalize(contrastive_probs, p=1, dim=-1)
+                contrastive_log_probs = torch.log(contrastive_probs)
+                contrastive_labels = torch.zeros(shift_inputs.shape, dtype=torch.int64).to(self.input_device)
+                contrastive_loss = token_weighted_loss('nll', contrastive_log_probs, contrastive_labels, shift_weights)
+                contrastive_loss *= self.args.contrastive_loss_ratio / 100
+                return_dict['contrastive_loss'] = contrastive_loss.item()
+
+            kl_loss = 0
+            if self.args.kl_loss_ratio != 0:
+                correct_log_probs = F.log_softmax(correct_logits, dim=-1)
+                self.model.eval()
+                with torch.no_grad():
+                    ref_logits, _ = get_logits_from_lm(self.model, inputs, None)
+                self.model.train()
+                ref_log_probs = F.log_softmax(ref_logits, dim=-1)
+                kl_loss += token_weighted_loss('kl', correct_log_probs, ref_log_probs, 1 - shift_weights)
+                incorrect_log_probs = F.log_softmax(incorrect_logits, dim=-1)
+                kl_loss += token_weighted_loss('kl', incorrect_log_probs, ref_log_probs, 1 - shift_weights)
+                kl_loss = kl_loss * self.args.kl_loss_ratio / 1000
+                return_dict['kl_loss'] = kl_loss.item()
+
+        loss = lm_loss + contrastive_loss + kl_loss
+        return_dict['loss'] = loss.item()
+        return loss, return_dict
 
