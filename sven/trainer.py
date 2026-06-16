@@ -659,4 +659,3 @@ class PromptTuningTrainer(TrainerBase):
         loss = lm_loss + contrastive_loss + kl_loss
         return_dict['loss'] = loss.item()
         return loss, return_dict
-

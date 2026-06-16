@@ -120,6 +120,12 @@ BASE = "Salesforce/codegen-6B-multi"  # change depending on base model
 SELECTED_RUNS = [
     "6b-ep5-lr0.0001_r8_a8_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410",
     "6b-ep5-lr0.0001_r4_a8_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410",
+    "6b-ep5-lr0.0001_r4_a4_ld0.1_tout_proj_wu0_ga2_lm0.180_con41_kl410",
+    "6b-ep5-lr0.0001_r8_a8_ld0.1_tout_proj_wu0_ga2_lm0.180_con41_kl410",
+    "6b-ep5-lr0.0001_r4_a8_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410",
+    "6b-ep5-lr0.0001_r8_a16_ld0.1_tqkv_proj_wu0_ga2_lm0.180_con41_kl410",
+    "6b-ep5-lr0.0001_r4_a8_ld0.1_tout_proj_wu0_ga2_lm0.180_con41_kl410",
+    "6b-ep5-lr0.0001_r8_a16_ld0.1_tout_proj_wu0_ga2_lm0.180_con41_kl410",
 
 ]
 

@@ -47,9 +47,9 @@ from typing import List, Dict
 # ==============================================================
 # Base settings
 # ==============================================================
-PRETRAIN = "Salesforce/codegen-6B-multi"
+PRETRAIN = "Salesforce/codegen-2B-multi"
 MODEL_TYPE = "lora"
-BASE = "6b"
+BASE = "2b"
 NUM_TRAIN_EPOCHS = 5
 TRAINED_ROOT = Path("../trained")
 
@@ -70,8 +70,8 @@ if FIXED_LM_RATIO < 0:
 # Grid (EDIT THESE FREELY)
 # ==============================================================
 LEARNING_RATES = [1e-04]
-LORA_TARGETS = ["qkv_proj", "out_proj"]          # e.g. ["out_proj", "qkv_proj,out_proj"]
-LORA_RS = [4, 8]
+LORA_TARGETS = ["qkv_proj"]          # e.g. ["out_proj", "qkv_proj,out_proj"]
+LORA_RS = [4]
 LORA_DROPOUTS = [0.1]
 WARMUP_STEPS_LIST = [0]                         # e.g. [0, 200]
 
