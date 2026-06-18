@@ -24,7 +24,12 @@ NUM_TRIALS = 1  # trial 1->seed 1, trial 2->seed 2, ...
 # (PROMPT runs: checkpoint-last contains both sec/vul prompts)
 # -------------------------------------------------------
 SELECTED_RUNS = [
-    "6b-lr0.01_p16_lm0.180_con41_kl410",
+    # Examples:
+    "350m-lr0.05_v1_lm0.180_con41_kl410_ep7",
+    "350m-lr0.05_v5_lm0.180_con41_kl410_ep7",
+    "350m-lr0.05_v20_lm0.180_con41_kl410_ep7",
+    "350m-lr0.05_v100_lm0.180_con41_kl410_ep7",
+    "350m-lr0.05_v150_lm0.180_con41_kl410_ep7",
 ]
 
 # Run sec then vul automatically
@@ -131,7 +136,7 @@ def main():
         print(f"\n=== Running HumanEval for {run_name} ===")
 
         for control in CONTROLS:
-            for trial_idx in range(1, NUM_TRIALS -6):
+            for trial_idx in range(1, NUM_TRIALS +1):
                 seed = trial_idx
 
                 print(f"\n--- [{run_name}] START {control.upper()} trial={trial_idx} seed={seed} ---")
