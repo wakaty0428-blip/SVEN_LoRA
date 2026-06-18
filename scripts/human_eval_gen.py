@@ -19,7 +19,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output_name', type=str, required=True)
 
-    parser.add_argument('--model_type', type=str, choices=['lm', 'prefix', 'text', 'lora'], required=True)
+    parser.add_argument('--model_type', type=str, choices=['lm', 'prefix', 'text', 'lora', 'prompt'], required=True)
     parser.add_argument('--model_dir', type=str, default=None)
     parser.add_argument('--control', type=str, choices=['sec', 'vul'], default='sec')
 
@@ -175,7 +175,13 @@ def main():
 
     
     else:
-        tokenizer, model, device = load_model('prefix' if args.model_type == 'prefix' else 'lm', model_dir, False, args)
+        if args.model_type == 'prefix':
+            load_type = 'prefix'
+        elif args.model_type == 'prompt':
+            load_type = 'prompt'
+        else:
+            load_type = 'lm'
+        tokenizer, model, device = load_model(load_type, model_dir, False, args)
     
         model.eval()
 
@@ -201,7 +207,7 @@ def main():
             del inputs['token_type_ids']
 
         kwargs = dict()
-        if args.model_type == 'prefix':
+        if args.model_type in ('prefix', 'prompt'):
             if args.control == 'sec':
                 kwargs['control_id'] = 0
             else:
