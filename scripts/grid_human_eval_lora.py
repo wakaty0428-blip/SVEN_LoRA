@@ -138,7 +138,7 @@ def main():
         print(f"\n=== Running HumanEval for {run_name} ===")
 
         for control in CONTROLS:
-            for trial_idx in range(1, NUM_TRIALS -6):
+            for trial_idx in range(1, NUM_TRIALS +1):
                 # Optional skip example (update if you want per-trial skipping)
                 if run_name == "6b-ep3-lr0.0001_r8_lm0.280_con31_kl410" and control == "sec":
                     print(f"[SKIP] {run_name} sec already evaluated (all trials skipped)")

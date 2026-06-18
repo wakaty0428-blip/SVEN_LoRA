@@ -131,7 +131,7 @@ def main():
         print(f"\n=== Running HumanEval for {run_name} ===")
 
         for control in CONTROLS:
-            for trial_idx in range(1, NUM_TRIALS -6):
+            for trial_idx in range(1, NUM_TRIALS +1):
                 seed = trial_idx
 
                 print(f"\n--- [{run_name}] START {control.upper()} trial={trial_idx} seed={seed} ---")
