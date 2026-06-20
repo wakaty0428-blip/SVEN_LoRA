@@ -15,7 +15,7 @@
 #
 #   2) Full grid mode
 #      - Set SELECTED_RUNS = [].
-#      - Define the hyperparameter lists (learning_rates, virtual_tokens,
+#      - Define the hyperparameter lists (learning_rate, virtual_tokens,
 #        lm_loss_ratios, contrastive_ratios, kl_ratios).
 #      - The script generates all combinations via itertools.product().
 #
@@ -27,11 +27,18 @@
 #
 # Meaning of fields
 #   - lr  : learning rate passed to train.py
-#   - v   : number of virtual tokens (n_virtual_token) a.k.a. prompt length
+#   - v   : number of virtual tokens (n_prompt_token) a.k.a. prompt length
 #   - lm  : lm_loss_ratio (float) passed directly to train.py
 #   - con : contrastive_loss_ratio (int); trainer interprets as con/100
 #   - kl  : kl_loss_ratio (int); trainer interprets as kl/1000
 #   - ep  : num_train_epochs (int) used for training
+#
+# Resume / skip behavior
+#   If SKIP_EXISTING is True, any run whose output directory already
+#   contains a COMPLETED training run is skipped (not retrained).
+#   "Completed" means the run dir exists AND holds at least one final-state
+#   checkpoint (checkpoint-epoch-* or checkpoint-last). A bare/empty dir
+#   from a crashed run is NOT treated as done, so it will be retrained.
 #
 # Disk management
 #   After each run, cleanup_epoch_checkpoints() deletes intermediate
@@ -45,7 +52,7 @@
 #   - Learning rate is higher (1e-2 to 1e-1) because continuous prompt
 #     embeddings require more aggressive optimization than prefix vectors.
 #   - model_type is "prompt" (not "prefix").
-#   - The CLI flag is --n_virtual_token (not --n_prefix_token).
+#   - The CLI flag is --n_prompt_token (not --n_prefix_token).
 
 import itertools
 import subprocess
@@ -57,23 +64,16 @@ from pathlib import Path
 # 1) Manually specify runs you want to train (optional)
 #    If empty, script runs full grid below.
 # ==============================================================
-SELECTED_RUNS = [
-    # Examples:
-    "350m-lr0.05_v1_lm0.180_con41_kl410_ep7",
-    "350m-lr0.05_v5_lm0.180_con41_kl410_ep7",
-    "350m-lr0.05_v20_lm0.180_con41_kl410_ep7",
-    "350m-lr0.05_v100_lm0.180_con41_kl410_ep7",
-    "350m-lr0.05_v150_lm0.180_con41_kl410_ep7",
-]
+SELECTED_RUNS = []
 
 # ==============================================================
 # 2) Hyperparameter grids (used only when SELECTED_RUNS == [])
 # ==============================================================
-# learning_rates     = [5e-2]            # prompt-tuning: 1e-2 to 1e-1
-# virtual_tokens     = [50]              # prompt length v (20-100 for 6-7B)
-# lm_loss_ratios     = [0.180]           # raw lm ratio passed to train.py
-# contrastive_ratios = [35, 39, 41]      # raw con ratio (SVEN: /100 in trainer)
-# kl_ratios          = [350, 390, 410]   # raw kl ratio (SVEN: /1000 in trainer)
+learning_rate     = [0.01, 0.05, 0.1]    # Prompt-tuning scales: 1e-2 to 1e-1
+n_prompt_token     = [5, 10, 20, 50]        # Prompt length candidates (typical range)
+lm_loss_ratio     = [0.180]              # raw lm ratio passed to train.py
+contrastive_loss_ratio = [41]                 # raw con ratio (SVEN: /100 in trainer)
+kl_loss_ratio          = [410]                # raw kl ratio (SVEN: /1000 in trainer)
 
 # ==============================================================
 # 3) Base settings
@@ -82,6 +82,10 @@ pretrain = "Salesforce/codegen-350M-multi"
 model_type = "prompt"
 base = "350m"
 num_train_epochs = 7          # default; used when run name omits _ep<ep>
+
+# Skip a run if a completed training output already exists for its name.
+# Set to False to always (re)train every run regardless of existing output.
+SKIP_EXISTING = True
 
 # where train.py writes runs (relative to /scripts)
 TRAINED_ROOT = Path("../trained")
@@ -122,6 +126,37 @@ def parse_run_name(run_name: str):
         "kl": int(m.group("kl")),
         "ep": int(ep) if ep is not None else num_train_epochs,
     }
+
+# ==============================================================
+# Skip check (has this run already been trained?)
+# ==============================================================
+def run_already_completed(run_dir: Path) -> bool:
+    """
+    Return True if a run directory already holds a COMPLETED training run,
+    so it can be safely skipped.
+
+    A run counts as complete if the directory exists AND contains at least
+    one final-state checkpoint:
+        - any checkpoint-epoch-* directory, OR
+        - checkpoint-last
+
+    A bare/empty directory (e.g. a crashed run that produced no checkpoint)
+    is NOT treated as complete, so it will be retrained.
+
+    NOTE: If you instead want the cruder "directory exists -> skip" behavior,
+    replace the body of this function with:
+        return run_dir.exists()
+    """
+    if not run_dir.exists():
+        return False
+
+    epoch_re = re.compile(r"^checkpoint-epoch-\d+$")
+    has_epoch_ckpt = any(
+        p.is_dir() and epoch_re.match(p.name)
+        for p in run_dir.iterdir()
+    )
+    has_last_ckpt = (run_dir / "checkpoint-last").exists()
+    return has_epoch_ckpt or has_last_ckpt
 
 # ==============================================================
 # Cleanup (keep ONLY the final epoch checkpoint)
@@ -199,7 +234,21 @@ else:
 # ==============================================================
 # 6) Execute
 # ==============================================================
+skipped = 0
+trained = 0
+
 for run_name, hp in run_list:
+    run_dir = TRAINED_ROOT / run_name
+
+    # ---- Skip if this run has already been completed ----
+    if SKIP_EXISTING and run_already_completed(run_dir):
+        print("===================================================")
+        print(f"⏭  Skipping (already trained): {run_name}")
+        print(f"   Found existing run at: {run_dir}")
+        print("===================================================\n")
+        skipped += 1
+        continue
+
     cmd = [
         "python", "train.py",
         "--output_name", run_name,
@@ -221,6 +270,12 @@ for run_name, hp in run_list:
     print("===================================================\n")
 
     subprocess.run(cmd, check=False)
+    trained += 1
 
     # Keep only the final epoch checkpoint; delete intermediate ones.
-    cleanup_epoch_checkpoints(TRAINED_ROOT / run_name)
+    cleanup_epoch_checkpoints(run_dir)
+
+print("===================================================")
+print(f"Done. Trained: {trained} | Skipped (already existed): {skipped} | "
+      f"Total: {len(run_list)}")
+print("===================================================")
