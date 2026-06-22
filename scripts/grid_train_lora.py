@@ -47,10 +47,10 @@ from typing import List, Dict
 # ==============================================================
 # Base settings
 # ==============================================================
-PRETRAIN = "Salesforce/codegen-2B-multi"
+PRETRAIN = "Salesforce/codegen-350M-multi"
 MODEL_TYPE = "lora"
-BASE = "2b"
-NUM_TRAIN_EPOCHS = 5
+BASE = "350m"
+NUM_TRAIN_EPOCHS = 7
 TRAINED_ROOT = Path("../trained")
 
 # ==============================================================
@@ -71,7 +71,7 @@ if FIXED_LM_RATIO < 0:
 # ==============================================================
 LEARNING_RATES = [1e-04]
 LORA_TARGETS = ["qkv_proj"]          # e.g. ["out_proj", "qkv_proj,out_proj"]
-LORA_RS = [4]
+LORA_RS = [8]
 LORA_DROPOUTS = [0.1]
 WARMUP_STEPS_LIST = [0]                         # e.g. [0, 200]
 
@@ -177,8 +177,8 @@ def build_runs(grad_acc_steps_values: List[int]) -> List[Dict]:
     for lr in LEARNING_RATES:
         for tgt in LORA_TARGETS:
             for r in LORA_RS:
-                lora_alpha = r       # alpha = rank
-                # lora_alpha = 2 * r  # ✅ alpha = 2 * rank
+                # lora_alpha = r       # alpha = rank
+                lora_alpha = 2 * r  # ✅ alpha = 2 * rank
                 # lora_alpha = 4 * r
                 for ld in LORA_DROPOUTS:
                     for wu in WARMUP_STEPS_LIST:

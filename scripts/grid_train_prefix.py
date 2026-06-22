@@ -3,31 +3,31 @@
 # grid_train_prefix.py
 #
 # Purpose
-#   Train prefix-Tuning models for CodeGen using either:
+#   Train prefix-tuning models for CodeGen using either:
 #     (A) an explicit list of run names (SELECTED_RUNS), or
 #     (B) a full Cartesian-product grid (if SELECTED_RUNS is empty).
 #
 # Two modes
 #   1) SELECTED_RUNS mode (recommended for controlled experiments)
 #      - Put run names in SELECTED_RUNS.
-#      - Each run name encodes hyperparameters (lr, v, lm, con, kl, ep).
+#      - Each run name encodes hyperparameters (lr, p, lm, con, kl, ep).
 #      - The script parses those values and calls train.py for each run.
 #
 #   2) Full grid mode
 #      - Set SELECTED_RUNS = [].
-#      - Define the hyperparameter lists (learning_rate, virtual_tokens,
+#      - Define the hyperparameter lists (learning_rate, n_prefix_token,
 #        lm_loss_ratios, contrastive_ratios, kl_ratios).
 #      - The script generates all combinations via itertools.product().
 #
 # Run naming convention (required)
-#   <base>-lr<lr>_v<v>_lm<lm>_con<con>_kl<kl>_ep<ep>
+#   <base>-lr<lr>_p<p>_lm<lm>_con<con>_kl<kl>_ep<ep>
 #
 # Example
-#   350m-lr0.05_v50_lm0.180_con41_kl390_ep20
+#   350m-lr0.05_p50_lm0.180_con41_kl390_ep20
 #
 # Meaning of fields
 #   - lr  : learning rate passed to train.py
-#   - v   : number of virtual tokens (n_prefix_token) a.k.a. prefix length
+#   - p   : number of prefix tokens (n_prefix_token) a.k.a. prefix length
 #   - lm  : lm_loss_ratio (float) passed directly to train.py
 #   - con : contrastive_loss_ratio (int); trainer interprets as con/100
 #   - kl  : kl_loss_ratio (int); trainer interprets as kl/1000
@@ -46,13 +46,12 @@
 #   (highest-numbered) epoch checkpoint, plus checkpoint-last and any
 #   non-checkpoint files (e.g. train.log).
 #
-# Notes on prefix-tuning hyperparameters (vs. prefix-tuning)
-#   - Virtual tokens replace prefix tokens; typical range is 20-100
-#     (vs. 10-30 for prefix-tuning) per Table 7 of the paper.
+# Notes on prefix-tuning hyperparameters
+#   - Prefix tokens range typically between 20-100 per Table 7 of the paper.
 #   - Learning rate is higher (1e-2 to 1e-1) because continuous prefix
-#     embeddings require more aggressive optimization than prefix vectors.
-#   - model_type is "prefix" (not "prefix").
-#   - The CLI flag is --n_prefix_token (not --n_prefix_token).
+#     embeddings require more aggressive optimization than standard finetuning.
+#   - model_type is "prefix".
+#   - The CLI flag is --n_prefix_token.
 
 import itertools
 import subprocess
@@ -69,11 +68,11 @@ SELECTED_RUNS = []
 # ==============================================================
 # 2) Hyperparameter grids (used only when SELECTED_RUNS == [])
 # ==============================================================
-learning_rate     = [0.01]    # prefix-tuning scales: 1e-2 to 1e-1
-n_prefix_token     = [16]        # prefix length candidates (typical range)
-lm_loss_ratio     = [0.180]              # raw lm ratio passed to train.py
-contrastive_loss_ratio = [41]                 # raw con ratio (SVEN: /100 in trainer)
-kl_loss_ratio          = [410]                # raw kl ratio (SVEN: /1000 in trainer)
+learning_rate         = [0.01]       # prefix-tuning scales: 1e-2 to 1e-1
+n_prefix_token         = [16]         # prefix length candidates (p)
+lm_loss_ratio         = [0.180]      # raw lm ratio passed to train.py
+contrastive_loss_ratio = [41]         # raw con ratio (SVEN: /100 in trainer)
+kl_loss_ratio          = [410]        # raw kl ratio (SVEN: /1000 in trainer)
 
 # ==============================================================
 # 3) Base settings
@@ -94,12 +93,12 @@ TRAINED_ROOT = Path("../trained")
 # 4) Parse run name
 # ==============================================================
 # Accepts (ep is optional for backward compatibility):
-#   350m-lr0.05_v50_lm0.180_con41_kl390_ep20
-#   350m-lr0.05_v50_lm0.180_con41_kl390      (ep falls back to num_train_epochs)
+#   350m-lr0.05_p50_lm0.180_con41_kl390_ep20
+#   350m-lr0.05_p50_lm0.180_con41_kl390      (ep falls back to num_train_epochs)
 RUN_PATTERN = re.compile(
     r"^(?P<base>[^-]+)-"
     r"lr(?P<lr>[\d.eE+-]+)_"
-    r"v(?P<v>\d+)_"
+    r"p(?P<p>\d+)_"
     r"lm(?P<lm>[\d.]+)_"
     r"con(?P<con>\d+)_"
     r"kl(?P<kl>\d+)"
@@ -113,14 +112,14 @@ def parse_run_name(run_name: str):
             f"Run name does not match expected pattern:\n"
             f"  {run_name}\n\n"
             f"Expected format:\n"
-            f"  {base}-lr<lr>_v<v>_lm<lm>_con<con>_kl<kl>_ep<ep>\n"
+            f"  {base}-lr<lr>_p<p>_lm<lm>_con<con>_kl<kl>_ep<ep>\n"
             f"Example:\n"
-            f"  350m-lr0.05_v50_lm0.180_con41_kl390_ep20"
+            f"  350m-lr0.05_p50_lm0.180_con41_kl390_ep20"
         )
     ep = m.group("ep")
     return {
         "lr": float(m.group("lr")),
-        "v": int(m.group("v")),
+        "p": int(m.group("p")),
         "lm": float(m.group("lm")),
         "con": int(m.group("con")),
         "kl": int(m.group("kl")),
@@ -134,18 +133,6 @@ def run_already_completed(run_dir: Path) -> bool:
     """
     Return True if a run directory already holds a COMPLETED training run,
     so it can be safely skipped.
-
-    A run counts as complete if the directory exists AND contains at least
-    one final-state checkpoint:
-        - any checkpoint-epoch-* directory, OR
-        - checkpoint-last
-
-    A bare/empty directory (e.g. a crashed run that produced no checkpoint)
-    is NOT treated as complete, so it will be retrained.
-
-    NOTE: If you instead want the cruder "directory exists -> skip" behavior,
-    replace the body of this function with:
-        return run_dir.exists()
     """
     if not run_dir.exists():
         return False
@@ -164,21 +151,12 @@ def run_already_completed(run_dir: Path) -> bool:
 def cleanup_epoch_checkpoints(run_dir: Path) -> None:
     """
     Delete intermediate epoch checkpoints, keeping ONLY the final epoch.
-
-    Keeps:
-        - checkpoint-epoch-<MAX>   (the highest-numbered epoch = final epoch)
-        - checkpoint-last          (if present)
-        - train.log                (and any non checkpoint-epoch-* files)
-
-    Deletes:
-        - all other checkpoint-epoch-* directories (intermediate epochs)
     """
     if not run_dir.exists():
         return
 
     epoch_re = re.compile(r"^checkpoint-epoch-(\d+)$")
 
-    # Collect (epoch_number, path) for every epoch checkpoint dir.
     epoch_ckpts = []
     for p in run_dir.iterdir():
         if not p.is_dir():
@@ -190,13 +168,12 @@ def cleanup_epoch_checkpoints(run_dir: Path) -> None:
     if not epoch_ckpts:
         return
 
-    # Identify the final (highest) epoch checkpoint to keep.
     final_epoch, final_path = max(epoch_ckpts, key=lambda x: x[0])
 
     removed = 0
     for epoch_num, p in epoch_ckpts:
         if p == final_path:
-            continue  # keep the final epoch
+            continue  
         subprocess.run(["rm", "-rf", str(p)], check=False)
         removed += 1
 
@@ -219,16 +196,15 @@ run_list = []
 if SELECTED_RUNS:
     for name in SELECTED_RUNS:
         hp = parse_run_name(name)
-        # Ensure the name always carries the epoch field for clarity.
         if not name.endswith(f"_ep{hp['ep']}"):
             name = f"{name}_ep{hp['ep']}"
         run_list.append((name, hp))
 else:
-    for lr, v, lm, con, kl in itertools.product(
+    for lr, p, lm, con, kl in itertools.product(
         learning_rate, n_prefix_token, lm_loss_ratio, contrastive_loss_ratio, kl_loss_ratio
     ):
-        name = f"{base}-lr{lr}_v{v}_lm{lm:.3f}_con{con}_kl{kl}_ep{num_train_epochs}"
-        hp = {"lr": lr, "v": v, "lm": lm, "con": con, "kl": kl, "ep": num_train_epochs}
+        name = f"{base}-lr{lr}_p{p}_lm{lm:.3f}_con{con}_kl{kl}_ep{num_train_epochs}"
+        hp = {"lr": lr, "p": p, "lm": lm, "con": con, "kl": kl, "ep": num_train_epochs}
         run_list.append((name, hp))
 
 # ==============================================================
@@ -240,7 +216,6 @@ trained = 0
 for run_name, hp in run_list:
     run_dir = TRAINED_ROOT / run_name
 
-    # ---- Skip if this run has already been completed ----
     if SKIP_EXISTING and run_already_completed(run_dir):
         print("===================================================")
         print(f"⏭  Skipping (already trained): {run_name}")
@@ -255,11 +230,11 @@ for run_name, hp in run_list:
         "--model_type", model_type,
         "--pretrain_dir", pretrain,
         "--learning_rate", str(hp["lr"]),
-        "--n_prefix_token", str(hp["v"]),              # <-- prefix length
+        "--n_prefix_token", str(hp["p"]),               # <-- prefix length (p)
         "--lm_loss_ratio", str(hp["lm"]),
         "--contrastive_loss_ratio", str(hp["con"]),
         "--kl_loss_ratio", str(hp["kl"]),
-        "--num_train_epochs", str(hp["ep"]),           # <-- epochs from run name
+        "--num_train_epochs", str(hp["ep"]),
     ]
 
     print("===================================================")
@@ -272,11 +247,9 @@ for run_name, hp in run_list:
     subprocess.run(cmd, check=False)
     trained += 1
 
-    # Keep only the final epoch checkpoint; delete intermediate ones.
     cleanup_epoch_checkpoints(run_dir)
 
 print("===================================================")
 print(f"Done. Trained: {trained} | Skipped (already existed): {skipped} | "
       f"Total: {len(run_list)}")
 print("===================================================")
-
