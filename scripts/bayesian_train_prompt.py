@@ -68,10 +68,10 @@ import optuna
 
 # NOTE: prompt-tuning typically requires a higher learning rate than
 # prefix-tuning / LoRA for effective virtual-token embedding optimization.
-learning_rates = [0.01, 0.05, 0.1]
+learning_rates = [0.1, 0.2, 0.3, 0,4, 0.5]
 
 # number of virtual prompt tokens to try
-n_prompt_tokens = [5, 10, 20]
+n_prompt_tokens = [640]
 
 contrastive_ratios = list(range(25, 42, 2))   # /100  -> 0.25..0.41
 kl_ratios = list(range(250, 421, 20))         # /1000 -> 0.25..0.41
@@ -150,7 +150,7 @@ def objective(trial: optuna.Trial) -> float:
             f"Infeasible weights: lm={lm:.4f} (con={con_w:.4f}, kl={kl_w:.4f})"
         )
 
-    run_name = f"{base}-ep{num_train_epochs}-lr{lr}_p{npt}_lm{lm:.3f}_con{con}_kl{kl}"
+    run_name = f"{base}-ep{num_train_epochs}-lr{lr}_v{npt}_lm{lm:.3f}_con{con}_kl{kl}"
     run_dir = trained_root / run_name
     log_path = run_dir / "train.log"
 
