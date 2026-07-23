@@ -18,6 +18,19 @@
 /scripts/6b_r4a8/
 /scripts/6b_final/
 /scripts/*.txt
+/scripts/box_plots_350m-lr0.01_v640_lm0.180_con41_kl410_ep7/
+/scripts/box_plots_350m-lr0.05_v640_lm0.180_con41_kl410_ep7/
+/scripts/box_plots_350m-lr0.1_v640_lm0.180_con41_kl410_ep7/
+/scripts/box_plots_350m-lr0.15_v640_lm0.180_con41_kl410_ep7/
+/scripts/box_plots_350m-lr0.2_v640_lm0.180_con41_kl410_ep7/
+/scripts/box_plots_350m-lr0.25_v640_lm0.180_con41_kl410_ep7/
+/scripts/box_plots_350m-lr0.3_v640_lm0.180_con41_kl410_ep7/
+/scripts/box_plots_350m-lr0.35_v640_lm0.180_con41_kl410_ep7/
+/scripts/box_plots_350m-lr0.4_v640_lm0.180_con41_kl410_ep7/
+/scripts/box_plots_350m-lr0.45_v640_lm0.180_con41_kl410_ep7/
+/scripts/box_plots_350m-lr0.5_v640_lm0.180_con41_kl410_ep7/
+
+
 
 # Ignore large auto-generated or downloadable files
 **/codeql-linux64.zip
