@@ -17,11 +17,8 @@ Examples
 --------
 # Prefix-tuning, single objective
 python train_single.py --model_type prefix --loss_mode single \
-    --pretrain_dir 2b --output_name prefix_single --seed 1
-
-# Prefix-tuning, multi objective (SVEN-style) for the baseline of the ablation
-python train_single.py --model_type prefix --loss_mode multi \
-    --pretrain_dir 2b --output_name prefix_multi --seed 1
+    --pretrain_dir 350m --output_name 350m-prefix-single-smoke \
+    --num_train_epochs 1
 
 # LoRA / prompt-tuning, single objective
 python train_single.py --model_type lora   --loss_mode single --output_name lora_single
