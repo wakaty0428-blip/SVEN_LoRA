@@ -13,6 +13,7 @@ from collections import OrderedDict
 from sven.evaler import LMEvaler, PrefixEvaler, TextPromptEvaler, LoraEvaler, PromptTuningEvaler    # lora version
 from sven.utils import set_seed, set_logging, set_devices
 from sven.constant import BINARY_LABELS, MODEL_DIRS, CWES_DICT
+from range_blowup_filter import is_range_blowup    # [修正] CodeQL 範囲解析が爆発するコードの判定
 
 # ==============================================================
 # FORCE PATCH: PeftModel.set_adapter must propagate active_adapter
@@ -125,11 +126,13 @@ def codeql_create_db(info, out_src_dir, out_db_dir):
 
 def codeql_analyze(info, out_db_dir, out_csv_path):
     if info['language'] == 'py':
-        cmd = '../codeql/codeql database analyze {} {} --quiet --format=csv --output={} --additional-packs={}'
+        # [修正] --threads=0 を追加（全コアで解析して高速化）
+        cmd = '../codeql/codeql database analyze {} {} --quiet --threads=0 --format=csv --output={} --additional-packs={}'
         cmd = cmd.format(out_db_dir, info['check_ql'], out_csv_path, os.path.expanduser('~/.codeql/packages/codeql/'))
         subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL)
     elif info['language'] == 'c':
-        cmd = '../codeql/codeql database analyze {} {} --quiet --format=csv --output={} --additional-packs={}'
+        # [修正] --threads=0 を追加（全コアで解析して高速化）
+        cmd = '../codeql/codeql database analyze {} {} --quiet --threads=0 --format=csv --output={} --additional-packs={}'
         cmd = cmd.format(out_db_dir, info['check_ql'], out_csv_path, os.path.expanduser('~/.codeql/packages/codeql/'))
         subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL)
     else:
@@ -215,6 +218,20 @@ def eval_single(args, evaler, controls, output_dir, data_dir, vul_type, scenario
         with torch.no_grad():
             outputs, output_ids, dup_srcs, non_parsed_srcs = evaler.sample(file_context, func_context, control_id, info['language'])
 
+        # [修正] 同じ変数を「右辺で2回以上参照して自己更新」する代入が多数ある C コードは、
+        #        CodeQL の範囲解析が爆発して解析が終わらないため、CodeQL に渡す前に除外して
+        #        non_parsed 扱いにする（件数は 'range_blowup' にも記録）。判定は range_blowup_filter.py
+        kept_outputs, kept_ids = [], []
+        n_range_blowup = 0
+        for o, oid in zip(outputs, output_ids):
+            if is_range_blowup(o, info['language']):
+                non_parsed_srcs.append(o)
+                n_range_blowup += 1
+            else:
+                kept_outputs.append(o)
+                kept_ids.append(oid)
+        outputs, output_ids = kept_outputs, kept_ids
+
         out_src_dir = os.path.join(s_out_dir, f'{control}_output')
         os.makedirs(out_src_dir, exist_ok=True)
         output_ids_j = OrderedDict()
@@ -263,6 +280,7 @@ def eval_single(args, evaler, controls, output_dir, data_dir, vul_type, scenario
         d['vul'] = len(vuls)
         d['dup'] = len(dup_srcs)
         d['non_parsed'] = len(non_parsed_srcs)
+        d['range_blowup'] = n_range_blowup    # [修正] non_parsed のうち範囲解析爆発として除外した件数
         d['model_type'] = args.model_type
         d['model_dir'] = args.model_dir
         d['temp'] = args.temp
