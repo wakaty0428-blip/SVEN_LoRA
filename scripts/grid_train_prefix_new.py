@@ -146,7 +146,7 @@ SELECTED_RUNS = []
 #    so that only the effect of the weights is observed.
 # ==============================================================
 learning_rate  = [0.01]   # prefix-tuning: 1e-2 to 1e-1
-n_prefix_token = [8]      # prefix length (p)
+n_prefix_token = [16]      # prefix length (p)
 
 # ==============================================================
 # 3) Loss-weight search settings
@@ -181,7 +181,7 @@ SELECTION_CRITERION = (
 SCREEN_EPOCHS = 3          # Stage 1: short training (enough to rank candidates)
 FINAL_EPOCHS  = 7          # Stage 3: normal training
 SCREEN_SEEDS  = [1]
-FINAL_SEEDS   = [1, 2, 3]
+FINAL_SEEDS   = [1]
 PASS_SEED     = True       # set to False if train.py has no --seed option
 
 # ==============================================================
