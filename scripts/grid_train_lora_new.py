@@ -142,7 +142,7 @@ TRAINED_ROOT = Path("../trained")
 # ==============================================================
 LEARNING_RATES = [1e-04]
 LORA_TARGETS = ["qkv_proj"]          # e.g. ["out_proj", "qkv_proj,out_proj"]
-LORA_RS = [4]
+LORA_RS = [8]
 LORA_DROPOUTS = [0.1]
 WARMUP_STEPS_LIST = [0]              # e.g. [0, 200]
 # If --grad_acc_steps is given on the CLI, it overrides this list
@@ -183,7 +183,7 @@ SELECTION_CRITERION = (
 SCREEN_EPOCHS = 3          # Stage 1: short training (enough to rank candidates)
 FINAL_EPOCHS  = 7          # Stage 3: normal training
 SCREEN_SEEDS  = [1]
-FINAL_SEEDS   = [1, 2, 3]
+FINAL_SEEDS   = [1]
 PASS_SEED     = True       # set to False if train.py has no --seed option
 
 
