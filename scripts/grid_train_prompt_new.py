@@ -152,7 +152,7 @@ SELECTED_RUNS = []
 # ==============================================================
 learning_rate  = [0.4]    # prompt-tuning learning rate
 # learning_rate = [0.01, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
-n_prompt_token = [320]    # number of virtual tokens (v)
+n_prompt_token = [640]    # number of virtual tokens (v)
 # n_prompt_token = [5, 10, 20, 50]
 
 # ==============================================================
@@ -188,7 +188,7 @@ SELECTION_CRITERION = (
 SCREEN_EPOCHS = 3          # Stage 1: short training (enough to rank candidates)
 FINAL_EPOCHS  = 7          # Stage 3: normal training
 SCREEN_SEEDS  = [1]
-FINAL_SEEDS   = [1, 2, 3]
+FINAL_SEEDS   = [1]
 PASS_SEED     = True       # set to False if train.py has no --seed option
 
 # ==============================================================
