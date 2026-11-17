@@ -54,8 +54,17 @@
 #       -> 3 x 3 = 9 candidates.
 #     - con is rounded to steps of 0.01 and kl to steps of 0.001 (integer
 #       format of train.py); the remainder goes to lm so the sum is exactly 1.
-#     - The previous setting (REFERENCE_WEIGHTS) is added as the 10th run.
-#       It is the yardstick for screening and is also a valid candidate.
+#     - The SVEN candidate (contrastive x1, KL x1) is the REFERENCE run.
+#       It is the yardstick for screening (and the functional anchor when
+#       BASELINE_FUNCTIONAL is None), and it is also a valid candidate.
+#       Reason: its ratio is published in the SVEN paper, so the yardstick
+#       does not depend on a setting we chose ourselves.
+#     - Because con is stored in steps of 0.01, the SVEN run is trained as
+#       0.148 : 0.61 : 0.242 (ratio 1 : 4.12 : 1.64), the closest weights
+#       that sum exactly to 1.
+#     - Our previous self-chosen setting (lm 0.18, con 0.41, kl 0.41) is NOT
+#       used as a reference. Set INCLUDE_PREVIOUS_SETTING = True to add it as
+#       an ordinary extra candidate for comparison.
 #   Training
 #     - SCREEN_EPOCHS (3) epochs, training seed SCREEN_TRAIN_SEED (1).
 #       Short training is enough to drop clearly bad candidates.
@@ -64,7 +73,7 @@
 #     - train.log logs WEIGHTED losses (lm + contrastive + kl = loss), so each
 #       value is divided by its weight to get the UNWEIGHTED loss.
 #       Weighted values cannot be compared across different weights.
-#     - For each candidate, relative degradation vs. the reference run:
+#     - For each candidate, relative degradation vs. the SVEN reference run:
 #           deg = (loss_candidate - loss_reference) / loss_reference
 #       computed for the LM, contrastive and KL losses.
 #         LM loss up          -> generates the training code less well
@@ -76,7 +85,7 @@
 #     - At least MIN_KEEP_AFTER_SCREEN (4) and at most MAX_KEEP_AFTER_SCREEN
 #       (6) candidates go on; if needed, candidates are ranked by their worst
 #       degradation (smaller is better) to fill / cut the list.
-#       The reference run always goes on as well.
+#       The SVEN reference run always goes on as well.
 #     - Set SCREEN_BY_LOSS = False to skip screening (all candidates go on).
 #
 #   Stage 2: light evaluation of the remaining candidates and selection
@@ -84,22 +93,26 @@
 #   Evaluation (on the Stage 1 models)
 #     - Security rate: sec_eval.py + print_results.py, temperature SEC_TEMP.
 #     - Functional correctness: human_eval_gen.py + human_eval_exec.py +
-#       print_results.py --eval_type human_eval, metric pass@1.
+#       print_results.py --eval_type human_eval.
+#       HE_NUM_SAMPLES (100) completions are generated per problem and the
+#       metric pass@FUNC_K (pass@100, as in all earlier experiments) is
+#       computed from them. Tables show this as
+#       "pass@100 (100 samples/problem)".
 #     - "Light" = only SCREEN_EVAL_TRIALS (2) trials per model
 #       (trial i uses generation seed i). The settings of each trial are the
 #       same as in the full evaluation, so the numbers are comparable.
 #   Selection criterion (the same criterion is used again in Stage 3)
 #     1) Functional filter: keep candidates with
-#            mean pass@1 >= FUNC_ANCHOR - EPSILON
-#        FUNC_ANCHOR = BASELINE_FUNCTIONAL (pass@1 of the model WITHOUT
-#        fine-tuning, measured earlier) if it is set, otherwise the pass@1
-#        of the reference run. EPSILON = 1.0 point (HumanEval has 164
+#            mean pass@100 >= FUNC_ANCHOR - EPSILON
+#        FUNC_ANCHOR = BASELINE_FUNCTIONAL (pass@100 of the model WITHOUT
+#        fine-tuning, measured earlier) if it is set, otherwise the pass@100
+#        of the SVEN reference run. EPSILON = 1.0 point (HumanEval has 164
 #        problems, so 1 point is about 1-2 problems).
 #     2) Rank the remaining candidates by mean security rate (higher is
-#        better; ties broken by higher pass@1).
+#        better; ties broken by higher pass@100).
 #     3) The top TOP_K (2) go to Stage 3.
 #     - If NO candidate passes the functional filter, the TOP_K candidates
-#       with the highest pass@1 are taken instead (a warning is printed).
+#       with the highest pass@100 are taken instead (a warning is printed).
 #     - The weighted validation loss is NOT used for selection: changing
 #       the weights changes the scale of that metric itself, so a larger LM
 #       weight always looks better (this is why the earlier grid search
@@ -120,10 +133,10 @@
 #     - The same selection criterion as Stage 2 is applied.
 #     - If the security-rate difference between the best two eligible
 #       finalists is not larger than their standard deviation, they are
-#       treated as equal and the one with the higher pass@1 is chosen
+#       treated as equal and the one with the higher pass@100 is chosen
 #       (decided in advance to avoid choosing after seeing the results).
-#     - The reference run is also trained in Stage 3 if
-#       INCLUDE_REFERENCE_IN_FINAL is True, or automatically if
+#     - The SVEN reference run is also trained in Stage 3 (for comparison)
+#       if INCLUDE_REFERENCE_IN_FINAL is True, or automatically if
 #       BASELINE_FUNCTIONAL is None (it is then needed as the anchor).
 #
 # ==============================================================
@@ -143,9 +156,9 @@
 # ==============================================================
 #   1) Parsing of the print_results.py output: run --check_parse_sec and
 #      --check_parse_func on existing TXT files and confirm that the printed
-#      numbers match the overall security rate and pass@1. If not, edit
+#      numbers match the overall security rate and pass@100. If not, edit
 #      SEC_RATE_REGEX / SEC_OVERALL_REGEX / FUNC_REGEX.
-#   2) BASELINE_FUNCTIONAL: set to the pass@1 of the model without
+#   2) BASELINE_FUNCTIONAL: set to the pass@100 of the model without
 #      fine-tuning measured with the same HumanEval settings, or None.
 #   3) Run once with --dry_run and check the commands.
 # ==============================================================
@@ -173,7 +186,7 @@ CUDA_VISIBLE_DEVICES = "0"      # None: leave the environment unchanged
 
 # Fixed method hyperparameters (not searched)
 LEARNING_RATE = 0.01            # prefix-tuning: 1e-2 to 1e-1
-N_PREFIX_TOKEN = 8              # prefix length
+N_PREFIX_TOKEN = 16              # prefix length
 
 # Directory (inside ../trained/<run_name>/) passed to --model_dir in the
 # evaluations. For prefix runs, checkpoint-last holds both sec/vul prefixes.
@@ -200,7 +213,12 @@ def method_run_tag():
 SVEN_RATIO = {"lm": 1.0, "con": 4.0, "kl": 1.6}   # LM = 1
 CON_MULTIPLIERS = [0.5, 1.0, 2.0]
 KL_MULTIPLIERS = [0.5, 1.0, 2.0]
-REFERENCE_WEIGHTS = (0.180, 41, 410)              # previous setting (lm, con, kl)
+# Reference run = the SVEN candidate (contrastive x1, KL x1); see the header.
+REFERENCE_MULTIPLIERS = (1.0, 1.0)                # (contrastive, KL)
+
+# Previous self-chosen setting: NOT a reference. Optional extra candidate.
+INCLUDE_PREVIOUS_SETTING = False
+PREVIOUS_WEIGHTS = (0.180, 41, 410)               # (lm, con, kl)
 
 # Set to a list of (lm, con, kl) to skip Stage 1/2 selection and use these
 # as the Stage 3 finalists, e.g. [(0.148, 61, 242), (0.120, 49, 390)].
@@ -212,7 +230,7 @@ FINAL_WEIGHTS_OVERRIDE = None
 SCREEN_EPOCHS = 3
 FINAL_EPOCHS = 7
 SCREEN_TRAIN_SEED = 1
-FINAL_TRAIN_SEEDS = [1, 2, 3]
+FINAL_TRAIN_SEEDS = [1]
 
 # ==============================================================
 # Stage 1: screening by unweighted validation loss
@@ -220,7 +238,7 @@ FINAL_TRAIN_SEEDS = [1, 2, 3]
 SCREEN_BY_LOSS = True
 LOGGED_LOSSES_ARE_WEIGHTED = True     # train.log: lm + contrastive + kl = loss
 LOSS_TOLERANCE = {"lm": 0.10, "contrastive": 0.10, "kl": 0.10}
-MIN_KEEP_AFTER_SCREEN = 4             # not counting the reference run
+MIN_KEEP_AFTER_SCREEN = 4             # not counting the SVEN reference run
 MAX_KEEP_AFTER_SCREEN = 6
 
 # ==============================================================
@@ -228,7 +246,17 @@ MAX_KEEP_AFTER_SCREEN = 6
 # ==============================================================
 SEC_TEMP = 0.4
 HE_MAX_GEN_LEN = 200
-HE_NUM_SAMPLES_PER_GEN = 10
+# Number of completions generated PER PROBLEM (passed as --num_samples).
+# This is NOT the metric itself: pass@k is computed FROM these samples.
+# pass@100 = share of problems for which at least one of the 100 samples
+# passes the tests. The generation time is proportional to this number.
+HE_NUM_SAMPLES = 100
+HE_NUM_SAMPLES_PER_GEN = 10           # completions per generate() call
+# Functional metric: pass@FUNC_K. 100 = pass@100, the same metric as in all
+# earlier experiments (e.g. 14.97 % without fine-tuning).
+# pass@k needs k <= HE_NUM_SAMPLES. If FUNC_K is changed, BASELINE_FUNCTIONAL
+# must be changed to the baseline of the same metric.
+FUNC_K = 100
 HE_CONTROL = "sec"
 SCREEN_EVAL_TRIALS = 2                # Stage 2 (light evaluation)
 FINAL_EVAL_TRIALS = 5                 # Stage 3 (full evaluation)
@@ -236,10 +264,11 @@ FINAL_EVAL_TRIALS = 5                 # Stage 3 (full evaluation)
 # ==============================================================
 # Selection
 # ==============================================================
-# pass@1 (%) of the model WITHOUT fine-tuning, measured earlier with the same
-# HumanEval settings. None -> the reference run is used as the anchor.
+# pass@FUNC_K (%) = pass@100 of the model WITHOUT fine-tuning, measured earlier
+# with the same HumanEval settings. None -> the SVEN reference run is used as
+# the anchor.
 BASELINE_FUNCTIONAL = 14.97
-EPSILON = 2.0                          # allowed drop of pass@1 (points)
+EPSILON = 1.0                          # allowed drop of pass@FUNC_K (points)
 TOP_K = 2                              # finalists for Stage 3
 INCLUDE_REFERENCE_IN_FINAL = False     # forced to True if BASELINE_FUNCTIONAL is None
 
@@ -251,8 +280,19 @@ INCLUDE_REFERENCE_IN_FINAL = False     # forced to True if BASELINE_FUNCTIONAL i
 # SEC_RATE_REGEX matches is used and a note is printed.
 SEC_OVERALL_REGEX = r"overall"
 SEC_RATE_REGEX = r"sec[_ ]?rate\D{0,20}?(\d+(?:\.\d+)?)"
-# Functional: pass@1 (the lookahead avoids matching pass@10 / pass@100)
-FUNC_REGEX = r"pass@1(?!\d)\D{0,20}?(\d+(?:\.\d+)?)"
+# Functional: pass@FUNC_K (the lookahead (?!\d) avoids matching a longer
+# number, e.g. pass@10 or pass@100 when FUNC_K = 1)
+FUNC_REGEX = rf"pass@{FUNC_K}(?!\d)\D{{0,20}}?(\d+(?:\.\d+)?)"
+
+# Label used in all printed tables, e.g. "pass@100 (100 samples/problem)"
+FUNC_LABEL = f"pass@{FUNC_K} ({HE_NUM_SAMPLES} samples/problem)"
+FUNC_SHORT = f"pass@{FUNC_K}"
+if FUNC_K > HE_NUM_SAMPLES:
+    raise ValueError(f"pass@{FUNC_K} needs at least {FUNC_K} samples per problem "
+                     f"(HE_NUM_SAMPLES = {HE_NUM_SAMPLES}).")
+if HE_NUM_SAMPLES % HE_NUM_SAMPLES_PER_GEN != 0:
+    raise ValueError("HE_NUM_SAMPLES must be a multiple of HE_NUM_SAMPLES_PER_GEN "
+                     "(required by human_eval_gen.py).")
 
 # ==============================================================
 # Paths (relative to scripts/)
@@ -386,21 +426,29 @@ def weight_key(c):
 
 def build_stage1_candidates():
     cands, seen = [], set()
+    ref = sven_reference_candidate()
     for cm, km in itertools.product(CON_MULTIPLIERS, KL_MULTIPLIERS):
         lm, con, kl = ratio_to_weights(cm, km)
         c = make_candidate(lm, con, kl, f"con x{cm:g}, kl x{km:g}")
+        if weight_key(c) == weight_key(ref):
+            c = ref                      # the SVEN run is the reference
         if weight_key(c) not in seen:
             cands.append(c)
             seen.add(weight_key(c))
-    ref = make_candidate(*REFERENCE_WEIGHTS, label="reference (previous)",
-                         is_reference=True)
-    if weight_key(ref) in seen:
-        for c in cands:
-            if weight_key(c) == weight_key(ref):
-                c["is_reference"] = True
-    else:
+    if weight_key(ref) not in seen:      # if the grid does not contain x1, x1
         cands.append(ref)
+        seen.add(weight_key(ref))
+    if INCLUDE_PREVIOUS_SETTING:
+        prev = make_candidate(*PREVIOUS_WEIGHTS, label="previous (own)")
+        if weight_key(prev) not in seen:
+            cands.append(prev)
     return cands
+
+
+def sven_reference_candidate():
+    """The SVEN-ratio candidate used as the reference run."""
+    lm, con, kl = ratio_to_weights(*REFERENCE_MULTIPLIERS)
+    return make_candidate(lm, con, kl, label="SVEN 1:4:1.6 (ref)", is_reference=True)
 
 
 def weights_str(c):
@@ -544,7 +592,7 @@ def parse_sec_rate(text):
 
 def parse_func(text):
     m = re.search(FUNC_REGEX, text, re.IGNORECASE)
-    return (float(m.group(1)), "pass@1") if m else (None, "not found")
+    return (float(m.group(1)), FUNC_LABEL) if m else (None, "not found")
 
 
 # ==============================================================
@@ -602,6 +650,7 @@ def eval_functional(run_name, trial):
                   "--pretrain_dir", PRETRAIN,
                   "--output_name", out_name,
                   "--max_gen_len", str(HE_MAX_GEN_LEN),
+                  "--num_samples", str(HE_NUM_SAMPLES),
                   "--num_samples_per_gen", str(HE_NUM_SAMPLES_PER_GEN),
                   "--seed", str(trial)])
     ok = ok and run_cmd(["python", "human_eval_exec.py", "--output_name", out_name])
@@ -631,7 +680,7 @@ def evaluate_run(run_name, n_trials):
         if s_txt and s is None:
             print(f"[ERROR] security rate not found in {s_txt} (check SEC_RATE_REGEX)")
         if f_txt and f is None:
-            print(f"[ERROR] pass@1 not found in {f_txt} (check FUNC_REGEX)")
+            print(f"[ERROR] {FUNC_SHORT} not found in {f_txt} (check FUNC_REGEX)")
         sec_vals.append(s)
         func_vals.append(f)
     return {"sec_trials": sec_vals, "func_trials": func_vals,
@@ -655,11 +704,11 @@ def select_candidates(entries, anchor, k):
     eligible = [e for e in valid if e["passes_func_filter"]]
     if eligible:
         ranked = sorted(eligible, key=lambda e: (-e["sec_mean"], -e["func_mean"]))
-        return ranked[:k], (f"pass@1 >= {threshold:.2f} (anchor {anchor:.2f} - "
+        return ranked[:k], (f"{FUNC_SHORT} >= {threshold:.2f} (anchor {anchor:.2f} - "
                             f"epsilon {EPSILON}); ranked by security rate")
     ranked = sorted(valid, key=lambda e: -e["func_mean"])
-    print(f"[WARN] no candidate reaches pass@1 >= {threshold:.2f}; "
-          "taking the candidates with the highest pass@1 instead.")
+    print(f"[WARN] no candidate reaches {FUNC_SHORT} >= {threshold:.2f}; "
+          f"taking the candidates with the highest {FUNC_SHORT} instead.")
     return ranked[:k], "FALLBACK: no candidate passed the functional filter"
 
 
@@ -693,7 +742,7 @@ def stage1():
 
     if not SCREEN_BY_LOSS or not ref.get("val_unweighted"):
         if SCREEN_BY_LOSS:
-            print("[WARN] reference run has no val losses; screening skipped.")
+            print("[WARN] SVEN reference run has no val losses; screening skipped.")
         kept = usable
         for c in kept:
             c["screen"] = "kept (no screening)"
@@ -719,7 +768,7 @@ def stage1():
     kept = kept + [ref]
 
     lines = [f"STAGE 1 RESULT ({METHOD}) - unweighted validation losses of the last epoch",
-             f"tolerance vs. reference: {LOSS_TOLERANCE}",
+             f"reference = SVEN ratio run; tolerance vs. reference: {LOSS_TOLERANCE}",
              "",
              f"{'label':<22} {'lm':>5} {'con':>5} {'kl':>6} | {'LM':>7} {'CON':>7} {'KL':>7}"
              f" | {'dLM':>6} {'dCON':>6} {'dKL':>6} | screen"]
@@ -754,20 +803,21 @@ def stage2(kept):
     anchor_src = "BASELINE_FUNCTIONAL (no fine-tuning)"
     if anchor is None:
         anchor = ref["func_mean"] if ref and ref.get("func_mean") is not None else None
-        anchor_src = "reference run (Stage 2)"
+        anchor_src = "SVEN reference run (Stage 2)"
     if anchor is None:
         raise RuntimeError("No functional anchor: set BASELINE_FUNCTIONAL.")
 
     finalists, note = select_candidates(kept, anchor, TOP_K)
 
     lines = [f"STAGE 2 RESULT ({METHOD}) - {SCREEN_EVAL_TRIALS} trials per model",
-             f"anchor pass@1 = {anchor:.2f} from {anchor_src}; epsilon = {EPSILON}",
+             f"functional metric: {FUNC_LABEL}",
+             f"anchor {FUNC_SHORT} = {anchor:.2f} from {anchor_src}; epsilon = {EPSILON}",
              f"criterion: {note}", "",
-             f"{'label':<22} {'lm':>5} {'con':>5} {'kl':>6} | {'sec':>6} {'pass@1':>7} | filter | finalist"]
+             f"{'label':<22} {'lm':>5} {'con':>5} {'kl':>6} | {'sec':>6} {FUNC_SHORT:>8} | filter | finalist"]
     for c in sorted(kept, key=lambda c: -(c.get("sec_mean") or -1)):
         lines.append(
             f"{c['label']:<22} {c['lm']:5.3f} {c['con'] / 100:5.2f} {c['kl'] / 1000:6.3f} | "
-            f"{fmt(c.get('sec_mean')):>6} {fmt(c.get('func_mean')):>7} | "
+            f"{fmt(c.get('sec_mean')):>6} {fmt(c.get('func_mean')):>8} | "
             f"{'pass' if c.get('passes_func_filter') else 'FAIL':>6} | "
             f"{'YES' if c in finalists else ''}")
     save_text(RESULTS_ROOT / "stage2_selection.txt", lines)
@@ -818,7 +868,7 @@ def stage3(finalists, ref):
     anchor, anchor_src = BASELINE_FUNCTIONAL, "BASELINE_FUNCTIONAL (no fine-tuning)"
     if anchor is None:
         r = next(m for m in models if m.get("is_reference"))
-        anchor, anchor_src = r["func_mean"], "reference run (Stage 3)"
+        anchor, anchor_src = r["func_mean"], "SVEN reference run (Stage 3)"
 
     selectable = [m for m in models if not m.get("only_for_comparison")]
     ranked, note = select_candidates(selectable, anchor, len(selectable))
@@ -831,12 +881,13 @@ def stage3(finalists, ref):
             decision = ("security-rate difference of the top two "
                         f"({a['sec_mean'] - b['sec_mean']:.2f}) <= their std "
                         f"({max(a['sec_std'], b['sec_std']):.2f}): treated as equal, "
-                        "chose the higher pass@1")
+                        f"chose the higher {FUNC_SHORT}")
 
     lines = [f"STAGE 3 RESULT ({METHOD}) - mean +- std over training seeds {FINAL_TRAIN_SEEDS}",
-             f"anchor pass@1 = {anchor:.2f} from {anchor_src}; epsilon = {EPSILON}",
+             f"functional metric: {FUNC_LABEL}",
+             f"anchor {FUNC_SHORT} = {anchor:.2f} from {anchor_src}; epsilon = {EPSILON}",
              f"criterion: {note}", "",
-             f"{'label':<22} {'lm':>5} {'con':>5} {'kl':>6} | {'sec':>14} | {'pass@1':>14} | filter"]
+             f"{'label':<22} {'lm':>5} {'con':>5} {'kl':>6} | {'sec':>14} | {FUNC_SHORT:>14} | filter"]
     for m in models:
         tag = " (comparison only)" if m.get("only_for_comparison") else ""
         lines.append(
@@ -870,8 +921,7 @@ def load_stage1_kept():
 def load_stage2_finalists():
     if FINAL_WEIGHTS_OVERRIDE:
         fins = [make_candidate(*w, label="override") for w in FINAL_WEIGHTS_OVERRIDE]
-        return fins, make_candidate(*REFERENCE_WEIGHTS, label="reference (previous)",
-                                    is_reference=True)
+        return fins, sven_reference_candidate()
     data = load_json(RESULTS_ROOT / "stage2_selection.json")
     return data["finalists"], data.get("reference")
 
