@@ -18,6 +18,7 @@
 #   python new_experiment_process_lora.py --stage 2       # uses Stage 1 result file
 #   python new_experiment_process_lora.py --stage 3       # uses Stage 2 result file
 #   python new_experiment_process_lora.py --dry_run       # print the plan only
+#   python new_experiment_process_lora.py --report        # only rewrite summary_report.txt
 #
 #   Check that the result TXT files are parsed correctly (do this FIRST,
 #   using TXT files you already have from earlier evaluations):
@@ -36,6 +37,18 @@
 #       kl  : --kl_loss_ratio          (int)   -> kl  / 1000
 #   Every candidate satisfies  lm + con/100 + kl/1000 = 1.
 #   validate_weights() stops the script if this is violated.
+#
+# ==============================================================
+# Where the LoRA adapters are (IMPORTANT for the evaluations)
+# ==============================================================
+#   train.py saves ONE adapter per control in a sub-folder:
+#       ../trained/<run>/checkpoint-last/sec/adapter_config.json, adapter_model.bin
+#       ../trained/<run>/checkpoint-last/vul/adapter_config.json, adapter_model.bin
+#   The evaluation scripts expect --model_dir to be the ADAPTER folder
+#   (same as grid_human_eval_lora.py):
+#       --model_dir ../trained/<run>/checkpoint-last/sec
+#   Passing checkpoint-last itself fails with
+#   "adapter_config.json not found". See adapter_dir() below.
 #
 # ==============================================================
 # Overall workflow
@@ -145,6 +158,12 @@
 #   stage1_screening.json / .txt  : weights, unweighted val losses, screening
 #   stage2_selection.json / .txt  : light-evaluation results, finalists
 #   stage3_final.json     / .txt  : full results and the chosen weights
+#   summary_report.txt            : the whole process in one file: all weight
+#                                   ratios of Stage 1, screening result,
+#                                   Stage 2 security rate / functional
+#                                   correctness, Stage 3 finalists and the
+#                                   finally chosen ratio (written at the end
+#                                   of Stage 3, or with --report)
 #   sec_eval_txt/                 : TXT outputs of print_results.py (security)
 #   human_eval_txt/               : TXT outputs of print_results.py (HumanEval)
 #   The heavy folders under ../experiments/ are deleted after each TXT is
@@ -156,8 +175,9 @@
 # ==============================================================
 #   1) Parsing of the print_results.py output: run --check_parse_sec and
 #      --check_parse_func on existing TXT files and confirm that the printed
-#      numbers match the overall security rate and pass@100. If not, edit
-#      SEC_RATE_REGEX / SEC_OVERALL_REGEX / FUNC_REGEX.
+#      numbers match the overall security rate and pass@100.
+#      (The parser reads the markdown tables printed by print_results.py;
+#       see "Parsing of print_results.py output" below.)
 #   2) BASELINE_FUNCTIONAL: set to the pass@100 of the model without
 #      fine-tuning measured with the same HumanEval settings, or None.
 #   3) Run once with --dry_run and check the commands.
@@ -187,16 +207,23 @@ CUDA_VISIBLE_DEVICES = None     # None: leave the environment unchanged
 # Fixed method hyperparameters (not searched)
 LEARNING_RATE = 1e-04
 LORA_R = 8
-LORA_ALPHA = 2 * LORA_R         # alpha = 4 * rank (as in the existing grid script)
+LORA_ALPHA = 2 * LORA_R         # alpha = 2 * rank
 LORA_DROPOUT = 0.1
 LORA_TARGET_MODULES = "qkv_proj"
 WARMUP_STEPS = 0
 GRAD_ACC_STEPS = 2
 
-# Directory (inside ../trained/<run_name>/) passed to --model_dir in the
-# evaluations. CHECK this against grid_sec_eval_lora.py: if LoRA models are
-# loaded from another folder, change it here.
+# Checkpoint folder inside ../trained/<run_name>/ used for the evaluations.
 EVAL_MODEL_SUBDIR = "checkpoint-last"
+
+# LoRA adapters are saved per control inside the checkpoint folder:
+#   checkpoint-last/sec/, checkpoint-last/vul/
+# The evaluation scripts need the ADAPTER folder as --model_dir
+# (same as grid_human_eval_lora.py).
+ADAPTER_CONTROLS = ["sec", "vul"]
+# Adapter folder passed to sec_eval.py as --model_dir.
+# Must match how LoRA sec_eval was run before (e.g. grid_sec_eval_lora.py).
+SEC_EVAL_ADAPTER = "sec"
 
 
 def method_train_args():
@@ -272,7 +299,7 @@ HE_NUM_SAMPLES_PER_GEN = 10           # completions per generate() call
 FUNC_K = 100
 HE_CONTROL = "sec"
 SCREEN_EVAL_TRIALS = 2                # Stage 2 (light evaluation)
-FINAL_EVAL_TRIALS = 5                 # Stage 3 (full evaluation)
+FINAL_EVAL_TRIALS = 10                 # Stage 3 (full evaluation)
 
 # ==============================================================
 # Selection
@@ -281,21 +308,33 @@ FINAL_EVAL_TRIALS = 5                 # Stage 3 (full evaluation)
 # with the same HumanEval settings. None -> the SVEN reference run is used as
 # the anchor.
 BASELINE_FUNCTIONAL = 14.97
-EPSILON = 1.0                          # allowed drop of pass@FUNC_K (points)
+EPSILON = 2.0                          # allowed drop of pass@FUNC_K (points)
 TOP_K = 2                              # finalists for Stage 3
 INCLUDE_REFERENCE_IN_FINAL = False     # forced to True if BASELINE_FUNCTIONAL is None
 
 # ==============================================================
 # Parsing of print_results.py output (check with --check_parse_*)
 # ==============================================================
-# Security: a line matching SEC_OVERALL_REGEX (or one of the next 3 lines)
-# must contain SEC_RATE_REGEX. If no such line exists, the mean of all
-# SEC_RATE_REGEX matches is used and a note is printed.
-SEC_OVERALL_REGEX = r"overall"
-SEC_RATE_REGEX = r"sec[_ ]?rate\D{0,20}?(\d+(?:\.\d+)?)"
-# Functional: pass@FUNC_K (the lookahead (?!\d) avoids matching a longer
-# number, e.g. pass@10 or pass@100 when FUNC_K = 1)
-FUNC_REGEX = rf"pass@{FUNC_K}(?!\d)\D{{0,20}}?(\d+(?:\.\d+)?)"
+# print_results.py prints markdown tables. Columns are found by their
+# header names, so the column order does not matter.
+#
+# Security (sec_eval TXT), e.g.:
+#   |     cwe |   scenario |   control |   sec_rate: mean,   ci_low, ci_high | ...
+#   | cwe-089 |       0-py |       sec |              100.0,  0.0,     100.0 | ...
+#   ...
+#   | overall |    overall |       sec |              82.3,   0.0,     100.0 | ...
+#   | overall |    overall |       vul |              41.0,   0.0,     100.0 | ...
+#   -> security rate = first number (mean) of the "sec_rate" column in the
+#      row with cwe = "overall" and control = SEC_CONTROL  (here 82.3).
+#   If there is no row with control = SEC_CONTROL but exactly one "overall"
+#   row, that row is used (a note is printed).
+SEC_CONTROL = "sec"
+#
+# Functional (human_eval TXT), e.g.:
+#   |   pass@1 |   pass@5 |   pass@10 |   pass@25 |   pass@50 |   pass@100 |
+#   |----------+----------+-----------+-----------+-----------+------------|
+#   |      5.7 |      8.8 |      10.3 |      12.4 |      13.9 |       15.5 |
+#   -> value of the column "pass@FUNC_K" in the first data row (here 15.5).
 
 # Label used in all printed tables, e.g. "pass@100 (100 samples/problem)"
 FUNC_LABEL = f"pass@{FUNC_K} ({HE_NUM_SAMPLES} samples/problem)"
@@ -317,6 +356,16 @@ SEC_TXT_DIR = RESULTS_ROOT / "sec_eval_txt"
 FUNC_TXT_DIR = RESULTS_ROOT / "human_eval_txt"
 
 DRY_RUN = False   # set by --dry_run
+
+
+def adapter_dir(run_name, control):
+    """LoRA adapter folder of one control: ../trained/<run>/checkpoint-last/<control>"""
+    return TRAINED_ROOT / run_name / EVAL_MODEL_SUBDIR / control
+
+
+def adapter_ok(path):
+    """True if the folder contains a LoRA adapter (adapter_config.json)."""
+    return (path / "adapter_config.json").is_file()
 
 
 # ==============================================================
@@ -547,6 +596,11 @@ def train(c, epochs, seed, add_seed_to_name):
     if not ok or not run_already_completed(run_dir):
         print(f"[ERROR] training failed: {name}")
         return None
+    missing = [ctl for ctl in ADAPTER_CONTROLS if not adapter_ok(adapter_dir(name, ctl))]
+    if missing:
+        print(f"[ERROR] training finished but adapters are missing for {missing}: "
+              f"{TRAINED_ROOT / name / EVAL_MODEL_SUBDIR}")
+        return None
     return name
 
 
@@ -586,26 +640,89 @@ def unweighted_losses(logged, c):
 # ==============================================================
 # Parsing of print_results.py output
 # ==============================================================
+NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def split_table_row(line):
+    """'| a | b |' -> ['a', 'b']. Returns None if the line is not a table row."""
+    line = line.strip()
+    if not line.startswith("|"):
+        return None
+    return [cell.strip() for cell in line.strip("|").split("|")]
+
+
+def is_separator_row(cells):
+    return all(re.fullmatch(r"[-:+ ]*", c) for c in cells)
+
+
+def find_column(header, predicate):
+    for i, name in enumerate(header):
+        if predicate(name.lower()):
+            return i
+    return None
+
+
 def parse_sec_rate(text):
-    """Return (security rate, how it was found)."""
-    rate_re = re.compile(SEC_RATE_REGEX, re.IGNORECASE)
-    overall_re = re.compile(SEC_OVERALL_REGEX, re.IGNORECASE)
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if overall_re.search(line):
-            for nxt in lines[i:i + 4]:
-                m = rate_re.search(nxt)
-                if m:
-                    return float(m.group(1)), "overall line"
-    values = [float(m.group(1)) for line in lines for m in rate_re.finditer(line)]
-    if values:
-        return statistics.mean(values), f"mean of {len(values)} entries (no overall line)"
-    return None, "not found"
+    """Return (overall security rate, how it was found)."""
+    header, rate_col, cwe_col, ctrl_col = None, None, None, None
+    overall_rows = []
+    for line in text.splitlines():
+        cells = split_table_row(line)
+        if cells is None or is_separator_row(cells):
+            continue
+        col = find_column(cells, lambda n: n.startswith("sec_rate"))
+        if col is not None:                      # header row of the security table
+            header, rate_col = cells, col
+            cwe_col = find_column(cells, lambda n: n == "cwe")
+            ctrl_col = find_column(cells, lambda n: n == "control")
+            continue
+        if header is None or cwe_col is None or len(cells) != len(header):
+            continue
+        if cells[cwe_col].lower() == "overall":
+            overall_rows.append(cells)
+
+    if header is None:
+        return None, "no table with a 'sec_rate' column"
+    if not overall_rows:
+        return None, "no 'overall' row"
+
+    rows = overall_rows
+    how = f"overall row, control = {SEC_CONTROL}"
+    if ctrl_col is not None:
+        rows = [r for r in overall_rows if r[ctrl_col].lower() == SEC_CONTROL.lower()]
+        if not rows and len(overall_rows) == 1:
+            rows = overall_rows
+            how = f"the only overall row (control = {overall_rows[0][ctrl_col]})"
+        elif not rows:
+            ctrls = ", ".join(r[ctrl_col] for r in overall_rows)
+            return None, f"no overall row with control = {SEC_CONTROL} (found: {ctrls})"
+    m = NUMBER_RE.search(rows[0][rate_col])
+    return (float(m.group()), how) if m else (None, "sec_rate cell has no number")
 
 
 def parse_func(text):
-    m = re.search(FUNC_REGEX, text, re.IGNORECASE)
-    return (float(m.group(1)), FUNC_LABEL) if m else (None, "not found")
+    """Return (pass@FUNC_K, how it was found)."""
+    target = f"pass@{FUNC_K}"
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        cells = split_table_row(line)
+        if cells is None:
+            continue
+        col = find_column(cells, lambda n: n == target)
+        if col is None:
+            continue
+        for nxt in lines[i + 1:]:                # first data row below the header
+            row = split_table_row(nxt)
+            if row is None:
+                break
+            if is_separator_row(row):
+                continue
+            if len(row) == len(cells):
+                m = NUMBER_RE.search(row[col])
+                if m:
+                    return float(m.group()), FUNC_LABEL
+            break
+    return None, f"no table with a '{target}' column"
 
 
 # ==============================================================
@@ -619,9 +736,10 @@ def eval_security(run_name, trial):
         print(f"[SKIP] security TXT exists: {txt.name}")
         return txt
 
-    model_dir = TRAINED_ROOT / run_name / EVAL_MODEL_SUBDIR
-    if not DRY_RUN and not model_dir.exists():
-        print(f"[ERROR] missing model dir: {model_dir}")
+    # LoRA: pass the adapter folder (checkpoint-last/<control>), not checkpoint-last
+    model_dir = adapter_dir(run_name, SEC_EVAL_ADAPTER)
+    if not DRY_RUN and not adapter_ok(model_dir):
+        print(f"[ERROR] adapter_config.json not found in {model_dir}")
         return None
 
     ok = run_cmd(["python", "sec_eval.py",
@@ -651,9 +769,11 @@ def eval_functional(run_name, trial):
         print(f"[SKIP] HumanEval TXT exists: {txt.name}")
         return txt
 
-    model_dir = TRAINED_ROOT / run_name / EVAL_MODEL_SUBDIR
-    if not DRY_RUN and not model_dir.exists():
-        print(f"[ERROR] missing model dir: {model_dir}")
+    # LoRA: pass the adapter folder (checkpoint-last/<control>), as in
+    # grid_human_eval_lora.py
+    model_dir = adapter_dir(run_name, HE_CONTROL)
+    if not DRY_RUN and not adapter_ok(model_dir):
+        print(f"[ERROR] adapter_config.json not found in {model_dir}")
         return None
 
     ok = run_cmd(["python", "human_eval_gen.py",
@@ -691,9 +811,11 @@ def evaluate_run(run_name, n_trials):
         s = parse_sec_rate(s_txt.read_text(encoding="utf-8"))[0] if s_txt else None
         f = parse_func(f_txt.read_text(encoding="utf-8"))[0] if f_txt else None
         if s_txt and s is None:
-            print(f"[ERROR] security rate not found in {s_txt} (check SEC_RATE_REGEX)")
+            print(f"[ERROR] security rate not found in {s_txt} "
+                  f"({parse_sec_rate(s_txt.read_text(encoding='utf-8'))[1]})")
         if f_txt and f is None:
-            print(f"[ERROR] {FUNC_SHORT} not found in {f_txt} (check FUNC_REGEX)")
+            print(f"[ERROR] {FUNC_SHORT} not found in {f_txt} "
+                  f"({parse_func(f_txt.read_text(encoding='utf-8'))[1]})")
         sec_vals.append(s)
         func_vals.append(f)
     return {"sec_trials": sec_vals, "func_trials": func_vals,
@@ -919,7 +1041,221 @@ def stage3(finalists, ref):
                "note": note, "decision": decision, "models": models,
                "chosen": ({k: chosen[k] for k in ("lm", "con", "kl", "label")}
                           if chosen else None)})
+    write_summary_report()
     return chosen
+
+
+# ==============================================================
+# Summary report (whole process, Stage 1 -> Stage 3)
+# ==============================================================
+REPORT_PATH = RESULTS_ROOT / "summary_report.txt"
+
+
+def _ratio_str(c):
+    """Weights as a ratio with LM = 1, e.g. '1 : 4.12 : 1.64'."""
+    return f"1 : {c['con'] / 100.0 / c['lm']:.2f} : {c['kl'] / 1000.0 / c['lm']:.2f}"
+
+
+def _w_cols(c):
+    return f"{c['lm']:5.3f} {c['con'] / 100.0:5.2f} {c['kl'] / 1000.0:6.3f}"
+
+
+def _trials_str(values):
+    values = values or []
+    return "[" + ", ".join("n/a" if v is None else f"{v:.1f}" for v in values) + "]"
+
+
+def _key(c):
+    return (round(float(c["lm"]), 3), int(c["con"]), int(c["kl"]))
+
+
+def _load_if_exists(path):
+    return load_json(path) if path.exists() else None
+
+
+def write_summary_report():
+    """
+    Write summary_report.txt: which weight ratios were candidates (Stage 1),
+    which survived screening, their security rate / functional correctness
+    (Stage 2), which reached Stage 3, and which ratio was finally chosen.
+    Built from the stage*.json files, so it also works after running the
+    stages separately (or with --report).
+    """
+    s1 = _load_if_exists(RESULTS_ROOT / "stage1_screening.json")
+    s2 = _load_if_exists(RESULTS_ROOT / "stage2_selection.json")
+    s3 = _load_if_exists(RESULTS_ROOT / "stage3_final.json")
+    W = 104
+    L = []
+
+    L += ["=" * W,
+          f"SUMMARY REPORT - loss-weight search for {METHOD.upper()}",
+          "=" * W,
+          "Columns lm / con / kl are the actual weights (lm + con + kl = 1).",
+          "'ratio' is the same weights written as LM : contrastive : KL with LM = 1.",
+          "sec = overall security rate (%), "
+          f"{FUNC_SHORT} = functional correctness ({FUNC_LABEL}).",
+          ""]
+
+    # ---------------- [0] settings ----------------
+    L += ["[0] SETTINGS", "-" * W,
+          f"  base model            : {PRETRAIN}",
+          f"  fixed hyperparameters : {method_run_tag()}",
+          f"  center ratio          : SVEN paper, LM : con : KL = "
+          f"{SVEN_RATIO['lm']:g} : {SVEN_RATIO['con']:g} : {SVEN_RATIO['kl']:g}",
+          f"  multipliers           : contrastive x{CON_MULTIPLIERS}, KL x{KL_MULTIPLIERS}",
+          f"  Stage 1               : {SCREEN_EPOCHS} epochs (train seed {SCREEN_TRAIN_SEED}); "
+          f"drop if an unweighted val loss is worse than the SVEN run by more than "
+          f"{int(LOSS_TOLERANCE['lm'] * 100)} %",
+          f"                          (keep {MIN_KEEP_AFTER_SCREEN}-{MAX_KEEP_AFTER_SCREEN} "
+          "candidates + the SVEN run)",
+          f"  Stage 2               : {SCREEN_EVAL_TRIALS} evaluation trials per model; "
+          f"keep {FUNC_SHORT} >= anchor - epsilon, rank by sec, top {TOP_K} -> Stage 3",
+          f"  Stage 3               : {FINAL_EPOCHS} epochs x train seeds {FINAL_TRAIN_SEEDS}, "
+          f"{FINAL_EVAL_TRIALS} evaluation trials per model",
+          f"  security metric       : 'overall' row, control = {SEC_CONTROL}, "
+          f"sec_eval temperature {SEC_TEMP}",
+          f"  functional metric     : {FUNC_LABEL}"]
+    for name, s in (("Stage 2", s2), ("Stage 3", s3)):
+        if s:
+            L.append(f"  anchor ({name})      : {FUNC_SHORT} = {s['anchor']:.2f} from "
+                     f"{s['anchor_source']}, epsilon = {s['epsilon']} -> "
+                     f"threshold {s['anchor'] - s['epsilon']:.2f}")
+    L.append("")
+
+    # Per-candidate information from every stage, keyed by the weights
+    info = {}
+    order = []
+    if s1:
+        kept_runs = set(s1["kept"])
+        for c in s1["candidates"]:
+            k = _key(c)
+            order.append(k)
+            info[k] = {"c": c, "s1": c, "kept": c.get("run_name") in kept_runs}
+    if s2:
+        fin_keys = {_key(f) for f in s2["finalists"]}
+        for c in s2["evaluated"]:
+            k = _key(c)
+            if k not in info:
+                order.append(k)
+                info[k] = {"c": c}
+            info[k]["s2"] = c
+            info[k]["finalist"] = k in fin_keys
+    chosen_key = _key(s3["chosen"]) if s3 and s3.get("chosen") else None
+    if s3:
+        for m in s3["models"]:
+            k = _key(m)
+            if k not in info:
+                order.append(k)
+                info[k] = {"c": m}
+            info[k]["s3"] = m
+
+    # ---------------- [1] overview ----------------
+    n1 = len(s1["candidates"]) if s1 else 0
+    n_kept = len(s1["kept"]) if s1 else 0
+    n_fin = len(s2["finalists"]) if s2 else 0
+    L += ["[1] OVERVIEW (one row per weight ratio, all stages)", "-" * W]
+    if s1:
+        L.append(f"  {n1} candidates trained in Stage 1 -> {n_kept} kept after screening "
+                 f"-> evaluated in Stage 2 -> {n_fin} finalist(s) -> Stage 3 -> "
+                 f"{'1 chosen' if chosen_key else 'none chosen'}")
+    L += ["",
+          f"  {'label':<22} {'lm':>5} {'con':>5} {'kl':>6}  {'ratio':<16} | "
+          f"{'Stage 1':<8} | {'S2 sec':>6} {'S2 ' + FUNC_SHORT:>11} {'S2':>4} | "
+          f"{'S3 sec':>6} {'S3 ' + FUNC_SHORT:>11} | final"]
+    for k in order:
+        d = info[k]
+        c = d["c"]
+        st1 = "-" if "s1" not in d else ("kept" if d["kept"] else "dropped")
+        e2 = d.get("s2")
+        s2_txt = (f"{fmt(e2.get('sec_mean')):>6} {fmt(e2.get('func_mean')):>11} "
+                  f"{('fin' if d.get('finalist') else ('pass' if e2.get('passes_func_filter') else 'FAIL')):>4}"
+                  if e2 else f"{'-':>6} {'-':>11} {'-':>4}")
+        e3 = d.get("s3")
+        s3_txt = (f"{fmt(e3.get('sec_mean')):>6} {fmt(e3.get('func_mean')):>11}"
+                  if e3 else f"{'-':>6} {'-':>11}")
+        final = "CHOSEN" if k == chosen_key else ("(comparison)" if e3 and e3.get("only_for_comparison") else "")
+        L.append(f"  {c['label']:<22} {_w_cols(c)}  {_ratio_str(c):<16} | {st1:<8} | "
+                 f"{s2_txt} | {s3_txt} | {final}")
+    L += ["  (S2 column: fin = selected for Stage 3, pass = passed the functional filter "
+          "but not in the top, FAIL = below the threshold)", ""]
+
+    # ---------------- [2] Stage 1 ----------------
+    L += ["[2] STAGE 1 - candidates and screening by unweighted validation loss", "-" * W]
+    if not s1:
+        L += ["  (Stage 1 results not found)", ""]
+    else:
+        L += [f"  Losses are from the last 'val epoch' line of train.log, divided by each "
+              "run's own weights.",
+              "  dLM / dCON / dKL = % change vs. the SVEN run (negative = better).", "",
+              f"  {'label':<22} {'lm':>5} {'con':>5} {'kl':>6}  {'ratio':<16} | "
+              f"{'LM':>7} {'CON':>7} {'KL':>7} | {'dLM':>6} {'dCON':>6} {'dKL':>6} | result"]
+        for c in s1["candidates"]:
+            u = c.get("val_unweighted") or {}
+            dg = c.get("degradation") or {}
+            pct = lambda x: None if x is None else x * 100
+            L.append(f"  {c['label']:<22} {_w_cols(c)}  {_ratio_str(c):<16} | "
+                     f"{fmt(u.get('lm'), 4):>7} {fmt(u.get('contrastive'), 4):>7} "
+                     f"{fmt(u.get('kl'), 4):>7} | {fmt(pct(dg.get('lm')), 1):>6} "
+                     f"{fmt(pct(dg.get('contrastive')), 1):>6} {fmt(pct(dg.get('kl')), 1):>6} | "
+                     f"{c.get('screen', '')}")
+        L.append("")
+
+    # ---------------- [3] Stage 2 ----------------
+    L += ["[3] STAGE 2 - light evaluation of the kept candidates and selection", "-" * W]
+    if not s2:
+        L += ["  (Stage 2 results not found)", ""]
+    else:
+        L += [f"  criterion: {s2['note']}", "",
+              f"  {'rank':>4} {'label':<22} {'lm':>5} {'con':>5} {'kl':>6}  {'ratio':<16} | "
+              f"{'sec':>6} {'trials':<14} | {FUNC_SHORT:>8} {'trials':<14} | filter | Stage 3"]
+        ranked = sorted(s2["evaluated"], key=lambda c: (-(c.get("sec_mean") or -1)))
+        fin_keys = {_key(f) for f in s2["finalists"]}
+        for i, c in enumerate(ranked, start=1):
+            L.append(f"  {i:>4} {c['label']:<22} {_w_cols(c)}  {_ratio_str(c):<16} | "
+                     f"{fmt(c.get('sec_mean')):>6} {_trials_str(c.get('sec_trials')):<14} | "
+                     f"{fmt(c.get('func_mean')):>8} {_trials_str(c.get('func_trials')):<14} | "
+                     f"{'pass' if c.get('passes_func_filter') else 'FAIL':>6} | "
+                     f"{'YES' if _key(c) in fin_keys else ''}")
+        L.append("")
+
+    # ---------------- [4] Stage 3 ----------------
+    L += ["[4] STAGE 3 - full training with several seeds and the final decision", "-" * W]
+    if not s3:
+        L += ["  (Stage 3 results not found)", ""]
+    else:
+        L += [f"  criterion: {s3['note']}", ""]
+        for m in s3["models"]:
+            tag = "  [comparison only]" if m.get("only_for_comparison") else ""
+            L.append(f"  {m['label']}  ({weights_str(m)}, ratio {_ratio_str(m)}){tag}")
+            for r in m.get("per_seed", []):
+                L.append(f"      train seed {r['train_seed']}: "
+                         f"sec {fmt(r.get('sec_mean')):>6} {_trials_str(r.get('sec_trials')):<30} "
+                         f"{FUNC_SHORT} {fmt(r.get('func_mean')):>6} "
+                         f"{_trials_str(r.get('func_trials'))}")
+            L.append(f"      => sec {fmt(m.get('sec_mean'))} +- {fmt(m.get('sec_std'))}, "
+                     f"{FUNC_SHORT} {fmt(m.get('func_mean'))} +- {fmt(m.get('func_std'))}, "
+                     f"filter: {'pass' if m.get('passes_func_filter') else 'FAIL'}")
+            L.append("")
+        L += [f"  decision: {s3['decision']}", ""]
+
+    # ---------------- [5] final ----------------
+    L += ["[5] FINAL RESULT", "-" * W]
+    if chosen_key is None:
+        L += ["  No weights were chosen (Stage 3 not finished, or no valid results)."]
+    else:
+        m = info[chosen_key].get("s3") or s3["chosen"]
+        L += [f"  chosen     : {m['label']}",
+              f"  weights    : {weights_str(m)}",
+              f"  ratio      : LM : contrastive : KL = {_ratio_str(m)}",
+              f"  train.py   : --lm_loss_ratio {m['lm']} --contrastive_loss_ratio {m['con']} "
+              f"--kl_loss_ratio {m['kl']}"]
+        if m.get("sec_mean") is not None:
+            L.append(f"  Stage 3    : sec {fmt(m.get('sec_mean'))} +- {fmt(m.get('sec_std'))}, "
+                     f"{FUNC_SHORT} {fmt(m.get('func_mean'))} +- {fmt(m.get('func_std'))}")
+    L += ["", "=" * W]
+
+    save_text(REPORT_PATH, L)
+    print(f"\n[REPORT] written to {REPORT_PATH}")
 
 
 # ==============================================================
@@ -956,7 +1292,13 @@ def main():
     ap.add_argument("--dry_run", action="store_true")
     ap.add_argument("--check_parse_sec", nargs="+", metavar="TXT")
     ap.add_argument("--check_parse_func", nargs="+", metavar="TXT")
+    ap.add_argument("--report", action="store_true",
+                    help="only (re)write summary_report.txt from the stage*.json files")
     args = ap.parse_args()
+
+    if args.report:
+        write_summary_report()
+        return
 
     if args.check_parse_sec or args.check_parse_func:
         check_parse(args.check_parse_sec or [], "sec")
